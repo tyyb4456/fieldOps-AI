@@ -6,6 +6,8 @@ from pathlib import Path
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 
@@ -15,7 +17,33 @@ DEFAULT_DATABASE_URL = (
 DEFAULT_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
 
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
-PLACEHOLDER_DATABASE_CREDENTIALS = ("fieldops:fieldops", "changeme")
+SAFE_TLS_MODES = frozenset({"require", "verify-ca", "verify-full"})
+WEAK_DATABASE_PASSWORDS = frozenset(
+    {
+        "fieldops",
+        "changeme",
+        "password",
+        "postgres",
+        "admin",
+        "root",
+        "test",
+        "secret",
+        "123456",
+        "letmein",
+        "qwerty",
+    }
+)
+WEAK_DATABASE_CREDENTIAL_PAIRS = frozenset(
+    {
+        "fieldops:fieldops",
+        "postgres:postgres",
+        "admin:admin",
+        "root:root",
+        "test:test",
+        "user:password",
+        "user:pass",
+    }
+)
 
 
 class Environment(str, Enum):
@@ -39,6 +67,7 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
     database_url: str = DEFAULT_DATABASE_URL
     cors_origins: str = DEFAULT_CORS_ORIGINS
+    cors_allow_credentials: bool = True
     log_level: str = "INFO"
 
     db_pool_size: int = Field(default=5, ge=1)
@@ -46,6 +75,7 @@ class Settings(BaseSettings):
     db_pool_timeout: float = Field(default=30.0, gt=0)
     db_connect_timeout: float = Field(default=5.0, gt=0)
     db_echo: bool = False
+    db_require_tls: bool = True
 
     @field_validator("database_url", mode="before")
     @classmethod
@@ -61,11 +91,37 @@ class Settings(BaseSettings):
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, value: str) -> str:
-        if not value.startswith("postgresql+asyncpg://"):
+        try:
+            url = make_url(value)
+        except (ArgumentError, ValueError) as exc:
+            raise ValueError(
+                "DATABASE_URL must be a valid PostgreSQL URL"
+            ) from exc
+
+        if url.drivername != "postgresql+asyncpg":
             raise ValueError(
                 "DATABASE_URL must use the asyncpg driver "
                 "(postgresql+asyncpg://...)"
             )
+
+        if not url.host:
+            raise ValueError("DATABASE_URL must include a hostname")
+
+        if not url.database:
+            raise ValueError("DATABASE_URL must include a database name")
+
+        if url.port is not None:
+            try:
+                port = int(url.port)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "DATABASE_URL must include a valid port"
+                ) from exc
+            if not 1 <= port <= 65535:
+                raise ValueError(
+                    "DATABASE_URL port must be between 1 and 65535"
+                )
+
         return value
 
     @field_validator("api_v1_prefix")
@@ -97,18 +153,46 @@ class Settings(BaseSettings):
         if self.database_url == DEFAULT_DATABASE_URL:
             raise ValueError("DATABASE_URL must be configured for production")
 
-        lowered_url = self.database_url.lower()
-        if any(
-            credential in lowered_url
-            for credential in PLACEHOLDER_DATABASE_CREDENTIALS
+        url = make_url(self.database_url)
+        username = (url.username or "").strip()
+        password = (url.password or "").strip()
+        if not username or not password:
+            raise ValueError(
+                "DATABASE_URL must include a non-empty username and password "
+                "in production"
+            )
+
+        credential_pair = f"{username}:{password}".lower()
+        if (
+            credential_pair in WEAK_DATABASE_CREDENTIAL_PAIRS
+            or password.lower() in WEAK_DATABASE_PASSWORDS
         ):
             raise ValueError(
-                "DATABASE_URL must not use development placeholder credentials "
+                "DATABASE_URL must not use weak placeholder credentials "
                 "in production"
             )
 
         if not self.allowed_origins:
             raise ValueError("CORS_ORIGINS must be configured in production")
+
+        if self.cors_allow_credentials and "*" in self.allowed_origins:
+            raise ValueError(
+                "CORS_ORIGINS must not use a wildcard origin while "
+                "credentials are enabled in production"
+            )
+
+        if self.db_echo:
+            raise ValueError("DB_ECHO must be disabled in production")
+
+        if self.db_require_tls:
+            ssl_mode = str(url.query.get("ssl", "")).strip().lower()
+            if ssl_mode not in SAFE_TLS_MODES:
+                raise ValueError(
+                    "DATABASE_URL must enable TLS in production "
+                    "(ssl=require, ssl=verify-ca or ssl=verify-full); "
+                    "set DB_REQUIRE_TLS=false only when TLS is terminated "
+                    "elsewhere"
+                )
 
         return self
 

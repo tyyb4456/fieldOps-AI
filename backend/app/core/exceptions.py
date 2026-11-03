@@ -11,6 +11,15 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 logger = logging.getLogger(__name__)
 
+REQUEST_ID_HEADER = "X-Request-ID"
+
+
+def request_id_headers(request: Request) -> dict[str, str]:
+    request_id = getattr(request.state, "request_id", None)
+    if request_id:
+        return {REQUEST_ID_HEADER: request_id}
+    return {}
+
 
 class AppError(Exception):
     def __init__(
@@ -39,6 +48,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=error_payload(exc.code, exc.message),
+            headers=request_id_headers(request),
         )
 
     @app.exception_handler(RequestValidationError)
@@ -55,6 +65,7 @@ def register_exception_handlers(app: FastAPI) -> None:
                     "details": jsonable_encoder(exc.errors()),
                 }
             },
+            headers=request_id_headers(request),
         )
 
     @app.exception_handler(StarletteHTTPException)
@@ -62,10 +73,12 @@ def register_exception_handlers(app: FastAPI) -> None:
         request: Request,
         exc: StarletteHTTPException,
     ) -> JSONResponse:
+        headers = dict(exc.headers or {})
+        headers.update(request_id_headers(request))
         return JSONResponse(
             status_code=exc.status_code,
             content=error_payload("http_error", jsonable_encoder(exc.detail)),
-            headers=exc.headers,
+            headers=headers,
         )
 
     @app.exception_handler(Exception)
@@ -87,4 +100,5 @@ def register_exception_handlers(app: FastAPI) -> None:
                 "internal_server_error",
                 "An unexpected error occurred.",
             ),
+            headers=request_id_headers(request),
         )
