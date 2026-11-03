@@ -9,9 +9,13 @@ langchain-text-splitters
 
 pydantic
 pydantic[email]
+pydantic-settings
 python-dotenv
 fastapi
 uvicorn[standard]
+httpx
+pytest
+pytest-asyncio
 celery[redis]
 redis
 
