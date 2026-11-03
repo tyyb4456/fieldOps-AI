@@ -1,0 +1,52 @@
+.env
+.env.*
+!.env.example
+*.local
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+build/
+dist/
+wheels/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist-ssr/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS
+.DS_Store
+Thumbs.db
+
+.agents
+.impeccable
+.claude
+.gemini
+.opencode
+.taste-skill
