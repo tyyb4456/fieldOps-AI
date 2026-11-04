@@ -31,10 +31,12 @@ class Customer(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     user: Mapped[User] = relationship(back_populates="customer")
     equipment: Mapped[list[Equipment]] = relationship(
         back_populates="customer",
+        passive_deletes="all",
     )
     complaints: Mapped[list[Complaint]] = relationship(
         back_populates="customer",
         foreign_keys="Complaint.customer_id",
+        passive_deletes="all",
     )
 
     def __repr__(self) -> str:

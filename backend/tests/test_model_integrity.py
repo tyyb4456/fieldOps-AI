@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models import (
     Complaint,
@@ -496,3 +498,248 @@ async def test_duplicate_external_message_ids_are_rejected(
         await db_session.flush()
 
     await db_session.rollback()
+
+
+@pytest.mark.parametrize("preload_complaints", [False, True])
+async def test_equipment_deletion_with_complaint_is_rejected(
+    committed_db_session: AsyncSession,
+    preload_complaints: bool,
+) -> None:
+    _, customer = await add_customer(committed_db_session)
+    equipment = await add_equipment(committed_db_session, customer)
+    complaint = await add_complaint(
+        committed_db_session,
+        customer,
+        equipment,
+    )
+    await committed_db_session.commit()
+
+    equipment_id = equipment.id
+    complaint_id = complaint.id
+
+    if preload_complaints:
+        result = await committed_db_session.scalars(
+            select(Equipment)
+            .options(selectinload(Equipment.complaints))
+            .where(Equipment.id == equipment_id)
+        )
+        target = result.one()
+        assert len(target.complaints) == 1
+    else:
+        target = await committed_db_session.get(Equipment, equipment_id)
+        assert target is not None
+
+    await committed_db_session.delete(target)
+
+    with pytest.raises(IntegrityError):
+        await committed_db_session.commit()
+
+    await committed_db_session.rollback()
+
+    assert (
+        await committed_db_session.get(Equipment, equipment_id)
+        is not None
+    )
+    remaining = await committed_db_session.get(Complaint, complaint_id)
+    assert remaining is not None
+    assert remaining.equipment_id == equipment_id
+
+
+async def test_service_record_equipment_must_match_work_order(
+    db_session: AsyncSession,
+) -> None:
+    _, customer = await add_customer(db_session)
+    _, technician = await add_technician(db_session)
+    equipment_a = await add_equipment(db_session, customer)
+    equipment_b = await add_equipment(db_session, customer)
+    complaint = await add_complaint(db_session, customer, equipment_a)
+    work_order = await add_work_order(
+        db_session,
+        complaint,
+        equipment_a,
+    )
+
+    service_record = ServiceRecord(
+        equipment=equipment_b,
+        work_order=work_order,
+        technician=technician,
+    )
+    db_session.add(service_record)
+
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+    await db_session.rollback()
+
+
+@pytest.mark.parametrize("version", [None, "1.0"])
+async def test_duplicate_document_versions_are_rejected(
+    db_session: AsyncSession,
+    version: str | None,
+) -> None:
+    first = Document(
+        manufacturer="Acme Solar",
+        model="INV-5000",
+        document_name="INV-5000 Technical Manual",
+        version=version,
+        file_path="documents/acme/inv-5000.pdf",
+    )
+    db_session.add(first)
+    await db_session.flush()
+
+    duplicate = Document(
+        manufacturer="Acme Solar",
+        model="INV-5000",
+        document_name="INV-5000 Technical Manual",
+        version=version,
+        file_path="documents/acme/inv-5000-copy.pdf",
+    )
+    db_session.add(duplicate)
+
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+    await db_session.rollback()
+
+
+async def test_different_document_versions_are_allowed(
+    db_session: AsyncSession,
+) -> None:
+    documents = [
+        Document(
+            manufacturer="Acme Solar",
+            model="INV-5000",
+            document_name="INV-5000 Technical Manual",
+            version=version,
+            file_path=f"documents/acme/inv-5000-{version}.pdf",
+        )
+        for version in (None, "1.0", "2.0")
+    ]
+    db_session.add_all(documents)
+    await db_session.flush()
+
+    count = await db_session.scalar(
+        select(func.count(Document.id)).where(
+            Document.manufacturer == "Acme Solar",
+            Document.model == "INV-5000",
+            Document.document_name == "INV-5000 Technical Manual",
+        )
+    )
+    assert count == 3
+
+
+async def test_document_defaults_to_inactive_in_orm_and_database(
+    db_session: AsyncSession,
+) -> None:
+    document = Document(
+        manufacturer="Acme Solar",
+        model="INV-5000",
+        document_name="ORM Default Manual",
+        file_path="documents/acme/orm-default.pdf",
+    )
+    db_session.add(document)
+    await db_session.flush()
+
+    assert document.is_active is False
+
+    raw_result = await db_session.execute(
+        text(
+            "INSERT INTO documents "
+            "(manufacturer, model, document_name, file_path) "
+            "VALUES (:manufacturer, :model, :document_name, :file_path) "
+            "RETURNING is_active"
+        ),
+        {
+            "manufacturer": "Acme Solar",
+            "model": "INV-5000",
+            "document_name": "Database Default Manual",
+            "file_path": "documents/acme/database-default.pdf",
+        },
+    )
+    assert raw_result.scalar_one() is False
+
+
+async def test_updated_at_changes_on_orm_update(
+    committed_db_session: AsyncSession,
+) -> None:
+    _, customer = await add_customer(committed_db_session)
+    equipment = await add_equipment(committed_db_session, customer)
+    complaint = await add_complaint(
+        committed_db_session,
+        customer,
+        equipment,
+    )
+    await committed_db_session.commit()
+    await committed_db_session.refresh(complaint)
+
+    before = complaint.updated_at
+    await asyncio.sleep(0.01)
+
+    complaint.description = "Updated through the SQLAlchemy ORM."
+    await committed_db_session.commit()
+    await committed_db_session.refresh(complaint)
+
+    assert before is not None
+    assert complaint.updated_at > before
+
+
+async def test_document_deletion_cascades_chunks_via_orm(
+    db_session: AsyncSession,
+) -> None:
+    document = Document(
+        manufacturer="Acme Solar",
+        model="INV-5000",
+        document_name="Cascade Manual",
+        version="1.0",
+        file_path="documents/acme/cascade.pdf",
+    )
+    chunk = DocumentChunk(
+        document=document,
+        chunk_index=0,
+        content="Cascade test chunk.",
+    )
+    db_session.add_all([document, chunk])
+    await db_session.flush()
+
+    document_id = document.id
+    await db_session.delete(document)
+    await db_session.flush()
+
+    remaining = await db_session.scalar(
+        select(func.count(DocumentChunk.id)).where(
+            DocumentChunk.document_id == document_id
+        )
+    )
+    assert remaining == 0
+
+
+async def test_document_chunk_foreign_key_cascades_in_database(
+    db_session: AsyncSession,
+) -> None:
+    document = Document(
+        manufacturer="Acme Solar",
+        model="INV-5000",
+        document_name="Database Cascade Manual",
+        version="1.0",
+        file_path="documents/acme/database-cascade.pdf",
+    )
+    chunk = DocumentChunk(
+        document=document,
+        chunk_index=0,
+        content="Database cascade test chunk.",
+    )
+    db_session.add_all([document, chunk])
+    await db_session.flush()
+
+    document_id = document.id
+    await db_session.execute(
+        text("DELETE FROM documents WHERE id = :document_id"),
+        {"document_id": document_id},
+    )
+
+    remaining = await db_session.scalar(
+        select(func.count(DocumentChunk.id)).where(
+            DocumentChunk.document_id == document_id
+        )
+    )
+    assert remaining == 0

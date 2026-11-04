@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os
+from typing import TYPE_CHECKING
 
 import pytest
 from sqlalchemy import text
@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.db import session as session_module
 
-TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
+if TYPE_CHECKING:
+    from tests.conftest import MigrationDatabase
 
 
 class _FakeConnection:
@@ -48,14 +49,14 @@ async def test_database_check_returns_false_when_connection_fails(
     assert await session_module.verify_database_connection() is False
 
 
-@pytest.mark.skipif(
-    not TEST_DATABASE_URL,
-    reason="TEST_DATABASE_URL is not configured",
-)
 async def test_real_postgresql_connectivity(
     monkeypatch: pytest.MonkeyPatch,
+    migrated_database: MigrationDatabase,
 ) -> None:
-    engine = create_async_engine(TEST_DATABASE_URL, pool_pre_ping=True)
+    engine = create_async_engine(
+        migrated_database.url,
+        pool_pre_ping=True,
+    )
     try:
         async with engine.connect() as connection:
             result = await connection.execute(text("SELECT 1"))

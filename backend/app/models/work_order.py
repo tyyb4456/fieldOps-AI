@@ -87,13 +87,16 @@ class WorkOrder(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
     )
     assignments: Mapped[list[TechnicianAssignment]] = relationship(
         back_populates="work_order",
+        passive_deletes="all",
     )
     service_records: Mapped[list[ServiceRecord]] = relationship(
         back_populates="work_order",
         foreign_keys="ServiceRecord.work_order_id",
+        passive_deletes="all",
     )
     completion_reports: Mapped[list[CompletionReport]] = relationship(
         back_populates="work_order",
+        passive_deletes="all",
     )
 
     def __repr__(self) -> str:

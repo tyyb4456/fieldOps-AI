@@ -40,9 +40,11 @@ class Technician(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     user: Mapped[User] = relationship(back_populates="technician")
     assignments: Mapped[list[TechnicianAssignment]] = relationship(
         back_populates="technician",
+        passive_deletes="all",
     )
     service_records: Mapped[list[ServiceRecord]] = relationship(
         back_populates="technician",
+        passive_deletes="all",
     )
 
     def __repr__(self) -> str:

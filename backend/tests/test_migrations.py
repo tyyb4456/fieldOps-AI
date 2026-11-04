@@ -4,8 +4,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
+import pytest
 from alembic import command
-from sqlalchemy import Engine, create_engine, inspect
+from sqlalchemy import Engine, create_engine, inspect, text
 from sqlalchemy.engine import URL, make_url
 
 if TYPE_CHECKING:
@@ -179,3 +180,78 @@ def test_alembic_check_reports_no_schema_drift(
 ) -> None:
     command.upgrade(empty_migration_database.config, "head")
     command.check(empty_migration_database.config)
+
+
+def test_document_migration_preserves_existing_rows_and_changes_default(
+    empty_migration_database: MigrationDatabase,
+) -> None:
+    command.upgrade(empty_migration_database.config, "2dc9e9936fec")
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO documents "
+                    "(manufacturer, model, document_name, version, "
+                    "file_path, is_active) "
+                    "VALUES ('Acme', 'INV-5000', 'Existing Manual', "
+                    "NULL, 'existing.pdf', TRUE)"
+                )
+            )
+
+    command.upgrade(empty_migration_database.config, "head")
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            existing_is_active = connection.execute(
+                text(
+                    "SELECT is_active FROM documents "
+                    "WHERE document_name = 'Existing Manual'"
+                )
+            ).scalar_one()
+            new_is_active = connection.execute(
+                text(
+                    "INSERT INTO documents "
+                    "(manufacturer, model, document_name, file_path) "
+                    "VALUES ('Acme', 'INV-5000', 'New Manual', 'new.pdf') "
+                    "RETURNING is_active"
+                )
+            ).scalar_one()
+
+    assert existing_is_active is True
+    assert new_is_active is False
+
+
+def test_document_migration_aborts_on_duplicate_null_versions(
+    empty_migration_database: MigrationDatabase,
+) -> None:
+    command.upgrade(empty_migration_database.config, "2dc9e9936fec")
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            for file_path in ("first.pdf", "second.pdf"):
+                connection.execute(
+                    text(
+                        "INSERT INTO documents "
+                        "(manufacturer, model, document_name, version, "
+                        "file_path, is_active) "
+                        "VALUES ('Acme', 'INV-5000', 'Duplicate Manual', "
+                        "NULL, :file_path, TRUE)"
+                    ),
+                    {"file_path": file_path},
+                )
+
+    with pytest.raises(RuntimeError, match="duplicate documents"):
+        command.upgrade(empty_migration_database.config, "head")
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            version = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            document_count = connection.execute(
+                text("SELECT count(*) FROM documents")
+            ).scalar_one()
+
+    assert version == "2dc9e9936fec"
+    assert document_count == 2

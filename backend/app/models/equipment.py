@@ -58,14 +58,17 @@ class Equipment(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     complaints: Mapped[list[Complaint]] = relationship(
         back_populates="equipment",
         foreign_keys="Complaint.equipment_id",
+        passive_deletes="all",
     )
     work_orders: Mapped[list[WorkOrder]] = relationship(
         back_populates="equipment",
         foreign_keys="WorkOrder.equipment_id",
+        passive_deletes="all",
     )
     service_records: Mapped[list[ServiceRecord]] = relationship(
         back_populates="equipment",
         foreign_keys="ServiceRecord.equipment_id",
+        passive_deletes="all",
     )
 
     def __repr__(self) -> str:

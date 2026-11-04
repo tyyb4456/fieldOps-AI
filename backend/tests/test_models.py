@@ -118,6 +118,21 @@ def test_every_model_uses_uuid_primary_key_with_server_default() -> None:
         assert "gen_random_uuid" in str(id_column.server_default.arg)
 
 
+RESTRICT_RELATIONSHIPS = {
+    User: {"customer", "technician"},
+    Customer: {"equipment", "complaints"},
+    Technician: {"assignments", "service_records"},
+    Equipment: {"complaints", "work_orders", "service_records"},
+    Complaint: {"conversations", "work_order", "workflow_runs"},
+    Conversation: {"messages"},
+    WorkOrder: {
+        "assignments",
+        "service_records",
+        "completion_reports",
+    },
+}
+
+
 def test_relationships_are_configured() -> None:
     configure_mappers()
 
@@ -132,6 +147,21 @@ def test_relationships_are_configured() -> None:
     assert (
         inspect(Document).relationships["chunks"].cascade.delete_orphan
         is True
+    )
+
+
+def test_restrict_relationships_are_left_to_the_database() -> None:
+    configure_mappers()
+
+    for model, relationship_names in RESTRICT_RELATIONSHIPS.items():
+        for relationship_name in relationship_names:
+            assert (
+                inspect(model).relationships[relationship_name].passive_deletes
+                == "all"
+            )
+
+    assert (
+        inspect(Document).relationships["chunks"].passive_deletes is True
     )
 
 
@@ -166,6 +196,27 @@ def test_timestamps_are_timezone_aware() -> None:
         column = Base.metadata.tables[table_name].c[column_name]
         assert isinstance(column.type, DateTime)
         assert column.type.timezone is True
+
+
+def test_document_defaults_to_inactive() -> None:
+    column = Document.__table__.c["is_active"]
+
+    assert column.default.arg is False
+    assert column.server_default is not None
+    assert "false" in str(column.server_default.arg)
+
+
+def test_document_version_uniqueness_uses_nulls_not_distinct() -> None:
+    constraint = next(
+        constraint
+        for constraint in Document.__table__.constraints
+        if constraint.name == "uq_documents_manufacturer_model_name_version"
+    )
+
+    assert (
+        constraint.dialect_options["postgresql"]["nulls_not_distinct"]
+        is True
+    )
 
 
 def test_embedding_column_is_intentionally_deferred() -> None:

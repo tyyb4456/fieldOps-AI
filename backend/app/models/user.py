@@ -42,10 +42,12 @@ class User(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     customer: Mapped[Customer | None] = relationship(
         back_populates="user",
         uselist=False,
+        passive_deletes="all",
     )
     technician: Mapped[Technician | None] = relationship(
         back_populates="user",
         uselist=False,
+        passive_deletes="all",
     )
 
     def __repr__(self) -> str:

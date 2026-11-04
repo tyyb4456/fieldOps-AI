@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, String, Text, UniqueConstraint, true
+from sqlalchemy import Boolean, String, Text, UniqueConstraint, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, CreatedAtMixin, UUIDPrimaryKeyMixin
@@ -20,6 +20,7 @@ class Document(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
             "document_name",
             "version",
             name="uq_documents_manufacturer_model_name_version",
+            postgresql_nulls_not_distinct=True,
         ),
     )
 
@@ -31,8 +32,8 @@ class Document(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
-        default=True,
-        server_default=true(),
+        default=False,
+        server_default=false(),
     )
 
     chunks: Mapped[list[DocumentChunk]] = relationship(

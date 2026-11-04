@@ -119,6 +119,36 @@ def empty_migration_database() -> Iterator[MigrationDatabase]:
         yield database
 
 
+@pytest.fixture()
+def committed_migration_database(
+    empty_migration_database: MigrationDatabase,
+) -> MigrationDatabase:
+    command.upgrade(empty_migration_database.config, "head")
+    return empty_migration_database
+
+
+@pytest_asyncio.fixture
+async def committed_db_session(
+    committed_migration_database: MigrationDatabase,
+) -> AsyncSession:
+    engine = create_async_engine(
+        committed_migration_database.url,
+        poolclass=NullPool,
+    )
+    session_factory = async_sessionmaker(
+        bind=engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        autoflush=False,
+    )
+
+    try:
+        async with session_factory() as session:
+            yield session
+    finally:
+        await engine.dispose()
+
+
 @pytest_asyncio.fixture
 async def db_session(
     migrated_database: MigrationDatabase,

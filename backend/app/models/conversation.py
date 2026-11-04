@@ -47,6 +47,7 @@ class Conversation(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     )
     messages: Mapped[list[Message]] = relationship(
         back_populates="conversation",
+        passive_deletes="all",
     )
 
     def __repr__(self) -> str:

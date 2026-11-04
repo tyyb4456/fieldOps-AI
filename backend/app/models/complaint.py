@@ -96,14 +96,17 @@ class Complaint(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
     )
     conversations: Mapped[list[Conversation]] = relationship(
         back_populates="complaint",
+        passive_deletes="all",
     )
     work_order: Mapped[WorkOrder | None] = relationship(
         back_populates="complaint",
         uselist=False,
         foreign_keys="WorkOrder.complaint_id",
+        passive_deletes="all",
     )
     workflow_runs: Mapped[list[WorkflowRun]] = relationship(
         back_populates="complaint",
+        passive_deletes="all",
     )
 
     def __repr__(self) -> str:
