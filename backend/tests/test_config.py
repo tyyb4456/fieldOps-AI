@@ -21,6 +21,9 @@ ENV_KEYS = (
     "LOG_LEVEL",
     "DB_ECHO",
     "DB_REQUIRE_TLS",
+    "CLERK_SECRET_KEY",
+    "CLERK_JWT_KEY",
+    "CLERK_AUTHORIZED_PARTIES",
 )
 
 PRODUCTION_DATABASE_URL = (
@@ -36,6 +39,8 @@ def production_settings(**overrides: object) -> Settings:
         "debug": False,
         "database_url": PRODUCTION_DATABASE_URL,
         "cors_origins": "https://app.example.com",
+        "clerk_secret_key": "sk_test_production_placeholder",
+        "clerk_authorized_parties": "https://app.example.com",
     }
     values.update(overrides)
     return Settings(**values)
@@ -115,38 +120,20 @@ def test_invalid_log_level_is_rejected() -> None:
 
 def test_production_rejects_debug_mode() -> None:
     with pytest.raises(ValidationError):
-        Settings(
-            _env_file=None,
-            environment="production",
-            debug=True,
-            database_url=(
-                "postgresql+asyncpg://realuser:realpass@db.example.com/prod"
-            ),
-            cors_origins="https://app.example.com",
-        )
+        production_settings(debug=True)
 
 
 def test_production_rejects_default_database_url() -> None:
     with pytest.raises(ValidationError):
-        Settings(
-            _env_file=None,
-            environment="production",
-            debug=False,
-            database_url=DEFAULT_DATABASE_URL,
-            cors_origins="https://app.example.com",
-        )
+        production_settings(database_url=DEFAULT_DATABASE_URL)
 
 
 def test_production_rejects_placeholder_credentials() -> None:
     with pytest.raises(ValidationError):
-        Settings(
-            _env_file=None,
-            environment="production",
-            debug=False,
+        production_settings(
             database_url=(
                 "postgresql+asyncpg://fieldops:fieldops@db.example.com/prod"
-            ),
-            cors_origins="https://app.example.com",
+            )
         )
 
 
@@ -294,3 +281,46 @@ def test_local_development_allows_non_tls_database_url() -> None:
     )
 
     assert settings.database_url == DEFAULT_DATABASE_URL
+
+
+def test_clerk_authorized_parties_are_parsed() -> None:
+    settings = Settings(
+        _env_file=None,
+        clerk_authorized_parties=(
+            "https://app.example.com, https://admin.example.com ,"
+        ),
+    )
+
+    assert settings.clerk_authorized_parties_list == [
+        "https://app.example.com",
+        "https://admin.example.com",
+    ]
+
+
+def test_clerk_jwt_key_literal_newlines_are_normalized() -> None:
+    settings = Settings(
+        _env_file=None,
+        clerk_jwt_key="-----BEGIN PUBLIC KEY-----\\nMIIB\\n-----END PUBLIC KEY-----",
+    )
+
+    assert settings.clerk_jwt_key == (
+        "-----BEGIN PUBLIC KEY-----\nMIIB\n-----END PUBLIC KEY-----"
+    )
+
+
+def test_production_requires_clerk_configuration() -> None:
+    with pytest.raises(ValidationError):
+        production_settings(
+            clerk_secret_key=None,
+            clerk_jwt_key=None,
+        )
+
+
+def test_production_rejects_wildcard_clerk_authorized_parties() -> None:
+    with pytest.raises(ValidationError):
+        production_settings(clerk_authorized_parties="*")
+
+
+def test_production_rejects_empty_clerk_authorized_parties() -> None:
+    with pytest.raises(ValidationError):
+        production_settings(clerk_authorized_parties=" , ")

@@ -743,3 +743,47 @@ async def test_document_chunk_foreign_key_cascades_in_database(
         )
     )
     assert remaining == 0
+
+
+async def test_duplicate_clerk_user_ids_are_rejected(
+    db_session: AsyncSession,
+) -> None:
+    clerk_user_id = f"user_{uuid.uuid4().hex}"
+    first = User(
+        full_name="First Clerk User",
+        clerk_user_id=clerk_user_id,
+        password_hash=None,
+        role=UserRole.CUSTOMER,
+    )
+    db_session.add(first)
+    await db_session.flush()
+
+    duplicate = User(
+        full_name="Duplicate Clerk User",
+        clerk_user_id=clerk_user_id,
+        password_hash=None,
+        role=UserRole.CUSTOMER,
+    )
+    db_session.add(duplicate)
+
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+    await db_session.rollback()
+
+
+async def test_clerk_users_may_have_no_password_hash(
+    db_session: AsyncSession,
+) -> None:
+    user = User(
+        full_name="Clerk Only User",
+        email=f"{uuid.uuid4().hex}@example.com",
+        clerk_user_id=f"user_{uuid.uuid4().hex}",
+        password_hash=None,
+        role=UserRole.CUSTOMER,
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    assert user.password_hash is None
+    assert user.clerk_user_id is not None

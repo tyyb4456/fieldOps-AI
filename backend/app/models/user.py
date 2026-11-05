@@ -27,7 +27,15 @@ class User(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         nullable=True,
         unique=True,
     )
-    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    clerk_user_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        unique=True,
+    )
+    password_hash: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
     role: Mapped[UserRole] = mapped_column(
         enum_type(UserRole, "user_role", length=20),
         nullable=False,

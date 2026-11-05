@@ -236,3 +236,15 @@ def test_composite_integrity_constraints_are_registered() -> None:
             for constraint in Base.metadata.tables[table_name].constraints
         }
         assert constraint_name in constraint_names
+
+
+def test_clerk_identity_is_unique_and_optional() -> None:
+    column = User.__table__.c["clerk_user_id"]
+
+    assert column.nullable is True
+    assert column.unique is True
+    assert column.type.length == 255
+
+
+def test_password_hash_is_optional_for_clerk_accounts() -> None:
+    assert User.__table__.c["password_hash"].nullable is True

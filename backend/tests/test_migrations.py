@@ -255,3 +255,101 @@ def test_document_migration_aborts_on_duplicate_null_versions(
 
     assert version == "2dc9e9936fec"
     assert document_count == 2
+
+
+def test_clerk_identity_migration_preserves_existing_users(
+    empty_migration_database: MigrationDatabase,
+) -> None:
+    command.upgrade(empty_migration_database.config, "0002_document_integrity")
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO users "
+                    "(full_name, email, password_hash, role) "
+                    "VALUES ('Existing User', 'existing@example.com', "
+                    "'legacy-hash', 'customer')"
+                )
+            )
+
+    command.upgrade(empty_migration_database.config, "head")
+
+    with _sync_engine(empty_migration_database) as engine:
+        inspector = inspect(engine)
+        columns = {
+            column["name"]: column
+            for column in inspector.get_columns("users")
+        }
+        uniques = {
+            unique["name"]
+            for unique in inspector.get_unique_constraints("users")
+        }
+
+        with engine.begin() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT full_name, email, password_hash, clerk_user_id "
+                    "FROM users WHERE email = 'existing@example.com'"
+                )
+            ).one()
+
+    assert columns["clerk_user_id"]["nullable"] is True
+    assert columns["password_hash"]["nullable"] is True
+    assert "uq_users_clerk_user_id" in uniques
+    assert row.full_name == "Existing User"
+    assert row.email == "existing@example.com"
+    assert row.password_hash == "legacy-hash"
+    assert row.clerk_user_id is None
+
+    command.downgrade(
+        empty_migration_database.config,
+        "0002_document_integrity",
+    )
+
+    with _sync_engine(empty_migration_database) as engine:
+        columns = {
+            column["name"]: column
+            for column in inspect(engine).get_columns("users")
+        }
+
+    assert "clerk_user_id" not in columns
+    assert columns["password_hash"]["nullable"] is False
+
+
+def test_clerk_identity_migration_downgrade_requires_password_hashes(
+    empty_migration_database: MigrationDatabase,
+) -> None:
+    command.upgrade(empty_migration_database.config, "head")
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO users "
+                    "(full_name, email, clerk_user_id, password_hash, role) "
+                    "VALUES ('Clerk User', 'clerk@example.com', "
+                    "'user_clerk_test', NULL, 'customer')"
+                )
+            )
+
+    with pytest.raises(RuntimeError, match="password_hash"):
+        command.downgrade(
+            empty_migration_database.config,
+            "0002_document_integrity",
+        )
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            version = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            clerk_user_id = connection.execute(
+                text(
+                    "SELECT clerk_user_id FROM users "
+                    "WHERE email = 'clerk@example.com'"
+                )
+            ).scalar_one()
+
+    assert version == "0003_clerk_identity"
+    assert clerk_user_id == "user_clerk_test"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -17,11 +18,15 @@ os.environ["DEBUG"] = "false"
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["LOG_LEVEL"] = "WARNING"
 
+import jwt
 import pytest
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import (
@@ -31,9 +36,50 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool
 
+from app.core.config import settings
+from app.db.session import get_db_session
 from app.main import app
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+
+TEST_CLERK_AUTHORIZED_PARTY = "http://localhost:5173"
+
+
+def _generate_rsa_key_pair() -> tuple[str, str]:
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    public_pem = key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("utf-8")
+    return private_pem, public_pem
+
+
+TEST_CLERK_PRIVATE_KEY, TEST_CLERK_PUBLIC_KEY = _generate_rsa_key_pair()
+
+
+def make_clerk_token(**claims: object) -> str:
+    now = int(time.time())
+    payload: dict[str, object] = {
+        "sub": f"user_{uuid.uuid4().hex}",
+        "sid": f"sess_{uuid.uuid4().hex}",
+        "azp": TEST_CLERK_AUTHORIZED_PARTY,
+        "iat": now,
+        "nbf": now,
+        "exp": now + 300,
+        "v": 2,
+    }
+    payload.update(claims)
+    return jwt.encode(
+        payload,
+        TEST_CLERK_PRIVATE_KEY,
+        algorithm="RS256",
+        headers={"kid": "test-key"},
+    )
 
 
 @dataclass(frozen=True)
@@ -172,10 +218,82 @@ async def db_session(
         await engine.dispose()
 
 
+@pytest_asyncio.fixture
+async def migrated_db_session(
+    committed_migration_database: MigrationDatabase,
+) -> AsyncSession:
+    engine = create_async_engine(
+        committed_migration_database.url,
+        poolclass=NullPool,
+    )
+    session_factory = async_sessionmaker(
+        bind=engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        autoflush=False,
+    )
+
+    try:
+        async with session_factory() as session:
+            yield session
+            await session.rollback()
+    finally:
+        await engine.dispose()
+
+
 @pytest.fixture
 def client() -> Iterator[TestClient]:
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture
+def auth_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "clerk_secret_key", None)
+    monkeypatch.setattr(settings, "clerk_jwt_key", TEST_CLERK_PUBLIC_KEY)
+    monkeypatch.setattr(
+        settings,
+        "clerk_authorized_parties",
+        TEST_CLERK_AUTHORIZED_PARTY,
+    )
+
+
+@pytest_asyncio.fixture
+async def api_client(
+    committed_migration_database: MigrationDatabase,
+    auth_settings: None,
+) -> AsyncClient:
+    engine = create_async_engine(
+        committed_migration_database.url,
+        poolclass=NullPool,
+    )
+    session_factory = async_sessionmaker(
+        bind=engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        autoflush=False,
+    )
+
+    async def override_get_db_session():
+        async with session_factory() as session:
+            try:
+                yield session
+            except Exception:
+                await session.rollback()
+                raise
+
+    app.dependency_overrides[get_db_session] = override_get_db_session
+
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as test_client:
+            yield test_client
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        await engine.dispose()
 
 
 @pytest.fixture(autouse=True)

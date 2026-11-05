@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     cors_allow_credentials: bool = True
     log_level: str = "INFO"
 
+    clerk_secret_key: str | None = None
+    clerk_jwt_key: str | None = None
+    clerk_authorized_parties: str = DEFAULT_CORS_ORIGINS
+
     db_pool_size: int = Field(default=5, ge=1)
     db_max_overflow: int = Field(default=10, ge=0)
     db_pool_timeout: float = Field(default=30.0, gt=0)
@@ -142,6 +146,37 @@ class Settings(BaseSettings):
             )
         return level
 
+    @field_validator("clerk_secret_key", "clerk_jwt_key", mode="before")
+    @classmethod
+    def normalize_optional_secret(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator("clerk_authorized_parties")
+    @classmethod
+    def validate_clerk_authorized_parties(cls, value: str) -> str:
+        parties = [party.strip() for party in value.split(",") if party.strip()]
+        if not parties:
+            raise ValueError(
+                "CLERK_AUTHORIZED_PARTIES must contain at least one origin"
+            )
+        if "*" in parties:
+            raise ValueError(
+                "CLERK_AUTHORIZED_PARTIES must not use a wildcard origin"
+            )
+        return ",".join(parties)
+
+    @field_validator("clerk_jwt_key")
+    @classmethod
+    def normalize_clerk_jwt_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.replace("\\n", "\n")
+
     @model_validator(mode="after")
     def validate_production_settings(self) -> Settings:
         if self.environment is not Environment.PRODUCTION:
@@ -181,6 +216,17 @@ class Settings(BaseSettings):
                 "credentials are enabled in production"
             )
 
+        if not self.clerk_secret_key and not self.clerk_jwt_key:
+            raise ValueError(
+                "CLERK_SECRET_KEY or CLERK_JWT_KEY must be configured "
+                "in production"
+            )
+
+        if not self.clerk_authorized_parties_list:
+            raise ValueError(
+                "CLERK_AUTHORIZED_PARTIES must be configured in production"
+            )
+
         if self.db_echo:
             raise ValueError("DB_ECHO must be disabled in production")
 
@@ -202,6 +248,14 @@ class Settings(BaseSettings):
             origin.strip()
             for origin in self.cors_origins.split(",")
             if origin.strip()
+        ]
+
+    @property
+    def clerk_authorized_parties_list(self) -> list[str]:
+        return [
+            party.strip()
+            for party in self.clerk_authorized_parties.split(",")
+            if party.strip()
         ]
 
     @property

@@ -28,11 +28,13 @@ class AppError(Exception):
         *,
         status_code: int = status.HTTP_500_INTERNAL_SERVER_ERROR,
         code: str = "application_error",
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
         self.code = code
+        self.headers = headers or {}
 
 
 def error_payload(code: str, message: Any) -> dict[str, Any]:
@@ -48,7 +50,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=error_payload(exc.code, exc.message),
-            headers=request_id_headers(request),
+            headers={**exc.headers, **request_id_headers(request)},
         )
 
     @app.exception_handler(RequestValidationError)
