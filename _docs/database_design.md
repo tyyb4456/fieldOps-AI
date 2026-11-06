@@ -64,13 +64,13 @@ An entity is something about which the application needs to store information. F
 | --- | --- | --- |
 | Identity | `users`, `customers`, `technicians` | User accounts and profiles |
 | Equipment | `equipment` | Customer-owned equipment |
-| Complaint management | `complaints`, `conversations`, `messages` | Incoming complaints and communication |
+| Complaint management | `complaints`, `complaint_history`, `conversations`, `messages` | Incoming complaints, append-only audit history and communication |
 | Work management | `work_orders`, `technician_assignments` | Repair jobs and scheduling |
 | Knowledge | `documents`, `document_chunks` | Manuals and searchable content |
 | Maintenance | `service_records`, `completion_reports` | Repair history and verification |
 | Workflow | `workflow_runs` | AI workflow monitoring |
 
-The initial design has 14 tables, a reasonable size for this project. Not every advanced feature needs to be implemented on day one.
+The initial design has 15 tables, a reasonable size for this project. Not every advanced feature needs to be implemented on day one.
 
 ## 3. Primary keys and foreign keys
 
@@ -203,7 +203,31 @@ One of the most important tables. It stores the original customer complaint and 
 
 **Why can `equipment_id` initially be nullable?** A customer may submit a complaint without knowing which equipment is affected. The AI can ask for clarification, and the equipment can be associated later.
 
-> The original complaint should remain available even after AI processing. Never replace the customer's original words with an AI-generated summary.
+> The original complaint should remain available even after AI processing. Never replace the customer's original words with an AI-generated summary. Edits made through the API are recorded in `complaint_history`, which keeps the previous values for every changed field.
+
+### Table 5a: `complaint_history`
+
+An append-only record of complaint mutations. Rows are inserted by the complaint service and are never updated or deleted through the application.
+
+| Column | Type | Description |
+| --- | --- | --- |
+| `id` | UUID | Primary key |
+| `complaint_id` | UUID | FK to complaints |
+| `sequence_number` | INTEGER | Per-complaint position, unique together with `complaint_id` |
+| `event_type` | VARCHAR | `created`, `updated` or `cancelled` |
+| `from_status` | VARCHAR | Status before the event, nullable |
+| `to_status` | VARCHAR | Status after the event, nullable |
+| `changed_fields` | JSONB | Previous and new values for changed fields |
+| `actor_id` | UUID | FK to users, nullable when the actor is unknown |
+| `created_at` | TIMESTAMPTZ | Database write timestamp (`now()`), informational only |
+
+**Ordering.** `sequence_number` is a per-complaint integer allocated by the complaint service while it holds the complaint row lock (`SELECT ... FOR UPDATE`). The unique constraint on `(complaint_id, sequence_number)` guarantees that no two events for a complaint share a position. History is always ordered by `sequence_number`, never by `id` or `created_at`.
+
+`created_at` uses PostgreSQL `now()`, which is the transaction start time rather than the instant an event occurred. Concurrent transactions can begin in one order, serialize on the complaint row lock in another, and therefore produce timestamps that do not match the committed event order. `created_at` is retained for display and audit context; it is not a reliable ordering key.
+
+**Historical coverage.** History tracking began with migration `0006`. Complaints created before that migration have no `created` event and no reconstructed events: the migration cannot recover old descriptions or transitions, and it does not fabricate a history stream. Migration `0007` backfills `sequence_number` only for rows that actually exist, ordered deterministically by `(created_at, id)`. That gives a stable ordering of recorded events, not necessarily the original real-world order.
+
+**Why a separate table?** The complaint row stores its current representation. History preserves the original customer wording and the recorded sequence of changes. For example, an update entry contains `{"description": {"from": "original words", "to": "revised words"}}`, so the original text is never lost.
 
 ### Table 6: `conversations`
 
@@ -437,7 +461,8 @@ Status management is a critical part of the database design. A complaint and a w
 | `ready_for_work_order` | Complaint has enough information |
 | `converted` | Work order has been created |
 | `escalated` | Requires human intervention |
-| `closed` | Complaint process has ended |
+| `closed` | Complaint process has ended through an internal closure |
+| `cancelled` | Customer withdrew the complaint before operational work began |
 
 ### Work-order statuses
 
@@ -578,7 +603,7 @@ CREATE TABLE technician_assignments (
 Two details to note:
 
 - This SQL assumes the `technicians` table has already been created, so the assignment table must be created after it. In a real migration, tables are defined in foreign-key dependency order.
-- `UNIQUE (manufacturer, serial_number)` is a simplified constraint. If serial numbers can be missing or reused by different manufacturers, the exact uniqueness rule should be reviewed for the chosen equipment domain.
+- `UNIQUE (manufacturer, serial_number)` is a simplified constraint. If serial numbers can be missing or reused by different manufacturers, the exact uniqueness rule should be reviewed for the chosen equipment domain. The implemented constraint keeps `serial_number` nullable while enforcing uniqueness only when a serial is present, so multiple items from the same manufacturer may omit a serial.
 
 ### Why use UUIDs?
 

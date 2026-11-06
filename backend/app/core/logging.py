@@ -13,6 +13,13 @@ EXTRA_FIELDS = (
     "status_code",
     "duration_ms",
     "environment",
+    "event",
+    "actor_id",
+    "customer_id",
+    "equipment_id",
+    "complaint_id",
+    "status_from",
+    "status_to",
 )
 
 

@@ -30,6 +30,7 @@ class ComplaintStatus(str, PyEnum):
     CONVERTED = "converted"
     ESCALATED = "escalated"
     CLOSED = "closed"
+    CANCELLED = "cancelled"
 
 
 class WorkOrderStatus(str, PyEnum):

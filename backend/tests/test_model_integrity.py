@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models import (
     Complaint,
+    ComplaintHistory,
     CompletionReport,
     Conversation,
     Customer,
@@ -787,3 +788,66 @@ async def test_clerk_users_may_have_no_password_hash(
 
     assert user.password_hash is None
     assert user.clerk_user_id is not None
+
+
+async def test_duplicate_complaint_history_sequence_is_rejected(
+    db_session: AsyncSession,
+) -> None:
+    _, customer = await add_customer(db_session)
+    complaint = await add_complaint(db_session, customer, None)
+
+    db_session.add(
+        ComplaintHistory(
+            complaint_id=complaint.id,
+            sequence_number=1,
+            event_type="created",
+            changed_fields={},
+        )
+    )
+    await db_session.flush()
+
+    db_session.add(
+        ComplaintHistory(
+            complaint_id=complaint.id,
+            sequence_number=1,
+            event_type="updated",
+            changed_fields={},
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+    await db_session.rollback()
+
+
+async def test_complaint_history_sequence_is_scoped_per_complaint(
+    db_session: AsyncSession,
+) -> None:
+    _, first_customer = await add_customer(db_session)
+    _, second_customer = await add_customer(db_session)
+    first_complaint = await add_complaint(db_session, first_customer, None)
+    second_complaint = await add_complaint(db_session, second_customer, None)
+
+    db_session.add_all(
+        [
+            ComplaintHistory(
+                complaint_id=first_complaint.id,
+                sequence_number=1,
+                event_type="created",
+                changed_fields={},
+            ),
+            ComplaintHistory(
+                complaint_id=second_complaint.id,
+                sequence_number=1,
+                event_type="created",
+                changed_fields={},
+            ),
+        ]
+    )
+
+    await db_session.flush()
+
+    count = await db_session.scalar(
+        select(func.count(ComplaintHistory.id))
+    )
+    assert count == 2

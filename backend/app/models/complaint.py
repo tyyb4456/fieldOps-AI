@@ -24,6 +24,7 @@ from app.models.enums import (
 )
 
 if TYPE_CHECKING:
+    from app.models.complaint_history import ComplaintHistory
     from app.models.conversation import Conversation
     from app.models.customer import Customer
     from app.models.equipment import Equipment
@@ -106,6 +107,11 @@ class Complaint(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
     )
     workflow_runs: Mapped[list[WorkflowRun]] = relationship(
         back_populates="complaint",
+        passive_deletes="all",
+    )
+    history: Mapped[list[ComplaintHistory]] = relationship(
+        back_populates="complaint",
+        order_by="ComplaintHistory.sequence_number",
         passive_deletes="all",
     )
 

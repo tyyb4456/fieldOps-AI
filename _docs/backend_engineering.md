@@ -404,6 +404,38 @@ The APIs the frontend and WhatsApp integration will use. These are proposed endp
 | POST | `/api/v1/complaints/{id}/messages` | Send a follow-up message |
 | POST | `/api/v1/complaints/{id}/attachments` | Upload an image or audio file |
 
+### Implemented customer, equipment and complaint APIs
+
+The first implementation uses customer-scoped routes so that ownership is part of the URL and cannot be supplied by the client:
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| GET / PATCH | `/api/v1/customers/me` | Read or update the caller's customer profile |
+| GET | `/api/v1/customers/{id}` | Admin-only customer profile lookup |
+| GET / POST | `/api/v1/customers/me/equipment` | List or register the caller's equipment |
+| GET / PATCH / DELETE | `/api/v1/customers/me/equipment/{id}` | Manage the caller's equipment |
+| GET / POST | `/api/v1/customers/me/complaints` | List or submit the caller's complaints |
+| GET / PATCH | `/api/v1/customers/me/complaints/{id}` | Read or edit an editable complaint |
+| POST | `/api/v1/customers/me/complaints/{id}/cancel` | Cancel the caller's complaint |
+| GET | `/api/v1/admin/equipment` | Admin equipment listing |
+| GET / POST | `/api/v1/admin/customers/{id}/equipment` | Admin equipment registration |
+| GET / PATCH / DELETE | `/api/v1/admin/equipment/{id}` | Admin equipment management |
+| GET | `/api/v1/admin/complaints` | Admin complaint listing |
+| GET | `/api/v1/admin/complaints/{id}` | Admin complaint detail |
+| GET | `/api/v1/admin/complaints/{id}/history` | Admin complaint history |
+
+Authorization and integrity rules enforced by these routes:
+
+- Customer routes resolve the customer profile from the authenticated identity; request bodies reject `customer_id`, `status`, `priority` and other server-controlled fields with a validation error.
+- Web complaint submissions always record `channel = web`. The customer endpoint ignores any client-supplied channel value so a web caller cannot mislabel a request as `whatsapp`.
+- Equipment and complaint reads, updates and deletes filter by the authenticated customer in SQL. Accessing another customer's record returns `404 not_found` rather than revealing that the record exists.
+- Equipment `manufacturer` and `serial_number` remain unique together. Equipment that is referenced by a complaint cannot be deleted and returns `409 equipment_in_use`.
+- Customers may edit a complaint only while its status is `received` or `awaiting_customer`. Customer cancellation is a transition to `cancelled`, which is distinct from an internal `closed`; other status changes remain an internal/admin workflow.
+- Complaint reads and edits acquire a row lock (`SELECT ... FOR UPDATE`) so a concurrent cancellation cannot be overwritten. Every accepted mutation appends a `complaint_history` row in the same transaction, preserving previous values and the original customer wording.
+- Every history row carries a per-complaint `sequence_number` allocated as `MAX(sequence_number) + 1` while the complaint row lock is held. The unique `(complaint_id, sequence_number)` constraint prevents duplicate positions, and history is read back ordered by `sequence_number`. `created_at` is a transaction-start timestamp for context and must not be used for ordering; see `database_integrity_conventions.md` sections 4-5.
+- History is append-only and admin-only via `GET /api/v1/admin/complaints/{id}/history`. Customers cannot read or write history, and the endpoint returns `404` for an unknown complaint. The pre-`0006` historical coverage gap and the destructive downgrade/archival policy are documented in `database_integrity_conventions.md`.
+- List endpoints enforce bounded pagination and return only records owned by the caller. Admin endpoints require the admin role and do not replace customer-level ownership checks.
+
 ### Work-order APIs
 
 | Method | Endpoint | Purpose |
@@ -503,7 +535,7 @@ READY_FOR_WORK_ORDER
 WORK_ORDER_CREATED
 ```
 
-Possible alternative outcomes: `CANCELLED`, `ESCALATED`, `REJECTED`.
+Possible alternative outcomes: `CANCELLED`, `ESCALATED`, `REJECTED`. In the persisted model, customer cancellation uses the distinct `cancelled` status; `closed` is reserved for internal closure so the two outcomes remain distinguishable.
 
 ### Work-order lifecycle
 

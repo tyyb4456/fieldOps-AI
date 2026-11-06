@@ -42,6 +42,24 @@ def error_payload(code: str, message: Any) -> dict[str, Any]:
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    # Imported lazily so the core error layer does not import service modules
+    # during application module initialization.
+    from app.services.authorization import AccessDeniedError
+
+    @app.exception_handler(AccessDeniedError)
+    async def access_denied_error_handler(
+        request: Request,
+        exc: AccessDeniedError,
+    ) -> JSONResponse:
+        # Object-level authorization failures are deliberately reported as
+        # 404 so callers cannot probe for the existence of other customers'
+        # records.
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content=error_payload("not_found", "Resource not found."),
+            headers=request_id_headers(request),
+        )
+
     @app.exception_handler(AppError)
     async def app_error_handler(
         request: Request,

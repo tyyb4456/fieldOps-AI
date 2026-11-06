@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.models.complaint import Complaint
+from app.models.complaint_history import ComplaintHistory
 from app.models.completion_report import CompletionReport
 from app.models.conversation import Conversation
 from app.models.customer import Customer
@@ -17,6 +18,7 @@ from app.models.workflow_run import WorkflowRun
 
 __all__ = [
     "Complaint",
+    "ComplaintHistory",
     "CompletionReport",
     "Conversation",
     "Customer",

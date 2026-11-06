@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.complaint import Complaint
 from app.models.customer import Customer
 from app.models.enums import AssignmentStatus, UserRole
+from app.models.equipment import Equipment
 from app.models.technician import Technician
 from app.models.technician_assignment import TechnicianAssignment
 from app.models.user import User
@@ -42,6 +43,38 @@ def is_technician(user: User) -> bool:
 def require_admin(user: User) -> None:
     if not is_admin(user):
         raise AccessDeniedError("Administrator role required")
+
+
+def scope_equipment_for_customer(
+    customer_id: uuid.UUID,
+) -> Select[tuple[Equipment]]:
+    return select(Equipment).where(Equipment.customer_id == customer_id)
+
+
+def scope_complaints_for_customer(
+    customer_id: uuid.UUID,
+) -> Select[tuple[Complaint]]:
+    return select(Complaint).where(Complaint.customer_id == customer_id)
+
+
+def scope_equipment_for_user(user: User) -> Select[tuple[Equipment]]:
+    if is_admin(user):
+        return select(Equipment)
+
+    if is_customer(user) and user.customer is not None:
+        return scope_equipment_for_customer(user.customer.id)
+
+    return select(Equipment).where(false())
+
+
+def scope_complaints_for_user(user: User) -> Select[tuple[Complaint]]:
+    if is_admin(user):
+        return select(Complaint)
+
+    if is_customer(user) and user.customer is not None:
+        return scope_complaints_for_customer(user.customer.id)
+
+    return select(Complaint).where(false())
 
 
 def scope_work_orders_for_user(user: User) -> Select[tuple[WorkOrder]]:

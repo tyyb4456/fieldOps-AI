@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
@@ -18,6 +19,7 @@ EXPECTED_TABLES = {
     "technicians",
     "equipment",
     "complaints",
+    "complaint_history",
     "conversations",
     "messages",
     "work_orders",
@@ -156,6 +158,40 @@ def test_expected_constraints_and_indexes_exist(
             "ix_complaints_equipment_id",
             "ix_complaints_status",
         } <= complaint_indexes
+
+        history_indexes = {
+            index["name"]
+            for index in inspector.get_indexes("complaint_history")
+        }
+        assert {
+            "ix_complaint_history_complaint_id",
+            "ix_complaint_history_created_at",
+        } <= history_indexes
+
+        history_uniques = {
+            unique["name"]
+            for unique in inspector.get_unique_constraints(
+                "complaint_history"
+            )
+        }
+        assert "uq_complaint_history_complaint_sequence" in history_uniques
+
+        history_columns = {
+            column["name"]: column
+            for column in inspector.get_columns("complaint_history")
+        }
+        assert history_columns["sequence_number"]["nullable"] is False
+
+        history_fks = {
+            fk["name"]: fk
+            for fk in inspector.get_foreign_keys("complaint_history")
+        }
+        assert history_fks[
+            "fk_complaint_history_complaint_id_complaints"
+        ]["referred_table"] == "complaints"
+        assert history_fks["fk_complaint_history_actor_id_users"][
+            "referred_table"
+        ] == "users"
 
 
 def test_downgrade_and_reupgrade(
@@ -351,7 +387,7 @@ def test_clerk_identity_migration_downgrade_requires_password_hashes(
                 )
             ).scalar_one()
 
-    assert version == "0005_profile_enrichment"
+    assert version == "0007_complaint_history_sequence"
     assert clerk_user_id == "user_clerk_test"
 
 
@@ -430,6 +466,73 @@ def test_email_normalization_migration_aborts_on_duplicates(
     assert version == "0003_clerk_identity"
 
 
+def test_complaint_cancellation_migration_backfills_closed_status(
+    empty_migration_database: MigrationDatabase,
+) -> None:
+    command.upgrade(
+        empty_migration_database.config,
+        "0005_profile_enrichment",
+    )
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            user_id = connection.execute(
+                text(
+                    "INSERT INTO users (full_name, email, role) "
+                    "VALUES ('Legacy', 'legacy@example.com', 'customer') "
+                    "RETURNING id"
+                )
+            ).scalar_one()
+            customer_id = connection.execute(
+                text(
+                    "INSERT INTO customers (user_id) VALUES (:user_id) "
+                    "RETURNING id"
+                ),
+                {"user_id": user_id},
+            ).scalar_one()
+            complaint_id = connection.execute(
+                text(
+                    "INSERT INTO complaints "
+                    "(customer_id, description, channel, status) "
+                    "VALUES (:customer_id, 'Legacy complaint', 'web', "
+                    "'closed') RETURNING id"
+                ),
+                {"customer_id": customer_id},
+            ).scalar_one()
+
+    command.upgrade(empty_migration_database.config, "head")
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            status = connection.execute(
+                text("SELECT status FROM complaints WHERE id = :id"),
+                {"id": complaint_id},
+            ).scalar_one()
+            history_count = connection.execute(
+                text("SELECT count(*) FROM complaint_history")
+            ).scalar_one()
+
+    assert status == "cancelled"
+    assert history_count == 0
+
+    command.downgrade(
+        empty_migration_database.config,
+        "0005_profile_enrichment",
+    )
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            status = connection.execute(
+                text("SELECT status FROM complaints WHERE id = :id"),
+                {"id": complaint_id},
+            ).scalar_one()
+        assert "complaint_history" not in _table_names(
+            empty_migration_database
+        )
+
+    assert status == "closed"
+
+
 def test_profile_enrichment_migration_adds_and_removes_columns(
     empty_migration_database: MigrationDatabase,
 ) -> None:
@@ -459,3 +562,170 @@ def test_profile_enrichment_migration_adds_and_removes_columns(
     assert "profile_enrichment_attempts" not in columns
     assert "profile_enrichment_last_attempt_at" not in columns
     assert "profile_enriched_at" not in columns
+
+
+def _insert_legacy_complaint(connection) -> object:
+    user_id = connection.execute(
+        text(
+            "INSERT INTO users (full_name, email, role) "
+            "VALUES ('History', :email, 'customer') "
+            "RETURNING id"
+        ),
+        {"email": f"history_{uuid.uuid4().hex}@example.com"},
+    ).scalar_one()
+    customer_id = connection.execute(
+        text("INSERT INTO customers (user_id) VALUES (:user_id) RETURNING id"),
+        {"user_id": user_id},
+    ).scalar_one()
+    return connection.execute(
+        text(
+            "INSERT INTO complaints "
+            "(customer_id, description, channel, status) "
+            "VALUES (:customer_id, 'History complaint', 'web', 'received') "
+            "RETURNING id"
+        ),
+        {"customer_id": customer_id},
+    ).scalar_one()
+
+
+def _insert_legacy_history(
+    connection,
+    complaint_id: object,
+    event_type: str,
+    created_at: str,
+) -> None:
+    connection.execute(
+        text(
+            "INSERT INTO complaint_history "
+            "(complaint_id, event_type, changed_fields, created_at) "
+            "VALUES (:complaint_id, :event_type, '{}'::jsonb, "
+            "CAST(:created_at AS timestamptz))"
+        ),
+        {
+            "complaint_id": complaint_id,
+            "event_type": event_type,
+            "created_at": created_at,
+        },
+    )
+
+
+def test_complaint_history_sequence_migration_backfills_existing_rows(
+    empty_migration_database: MigrationDatabase,
+) -> None:
+    command.upgrade(
+        empty_migration_database.config,
+        "0006_complaint_lifecycle",
+    )
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            first_complaint = _insert_legacy_complaint(connection)
+            second_complaint = _insert_legacy_complaint(connection)
+            _insert_legacy_history(
+                connection,
+                first_complaint,
+                "updated",
+                "2026-01-02T00:00:00+00:00",
+            )
+            _insert_legacy_history(
+                connection,
+                first_complaint,
+                "created",
+                "2026-01-01T00:00:00+00:00",
+            )
+            _insert_legacy_history(
+                connection,
+                first_complaint,
+                "cancelled",
+                "2026-01-03T00:00:00+00:00",
+            )
+            _insert_legacy_history(
+                connection,
+                second_complaint,
+                "created",
+                "2026-02-01T00:00:00+00:00",
+            )
+
+    command.upgrade(empty_migration_database.config, "head")
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT complaint_id, event_type, sequence_number "
+                    "FROM complaint_history "
+                    "ORDER BY complaint_id, sequence_number"
+                )
+            ).all()
+
+    by_complaint: dict[object, list[tuple[str, int]]] = {}
+    for row in rows:
+        by_complaint.setdefault(row.complaint_id, []).append(
+            (row.event_type, row.sequence_number)
+        )
+
+    assert by_complaint[first_complaint] == [
+        ("created", 1),
+        ("updated", 2),
+        ("cancelled", 3),
+    ]
+    assert by_complaint[second_complaint] == [("created", 1)]
+
+
+def test_complaint_history_downgrade_refuses_and_requires_archival(
+    empty_migration_database: MigrationDatabase,
+) -> None:
+    command.upgrade(empty_migration_database.config, "head")
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            complaint_id = _insert_legacy_complaint(connection)
+            connection.execute(
+                text(
+                    "INSERT INTO complaint_history "
+                    "(complaint_id, sequence_number, event_type, "
+                    "changed_fields) "
+                    "VALUES (:complaint_id, 1, 'created', '{}'::jsonb)"
+                ),
+                {"complaint_id": complaint_id},
+            )
+
+    with pytest.raises(RuntimeError, match="Refusing to downgrade"):
+        command.downgrade(
+            empty_migration_database.config,
+            "0005_profile_enrichment",
+        )
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            version = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            count = connection.execute(
+                text("SELECT count(*) FROM complaint_history")
+            ).scalar_one()
+            archived = connection.execute(
+                text(
+                    "SELECT complaint_id, sequence_number, event_type "
+                    "FROM complaint_history "
+                    "ORDER BY complaint_id, sequence_number"
+                )
+            ).all()
+
+    assert version == "0007_complaint_history_sequence"
+    assert count == 1
+    assert archived[0].complaint_id == complaint_id
+    assert archived[0].sequence_number == 1
+
+    # Documented archival procedure: the export above has been verified, so
+    # the operator deliberately empties the audit table before retrying.
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM complaint_history"))
+
+    command.downgrade(
+        empty_migration_database.config,
+        "0005_profile_enrichment",
+    )
+
+    assert "complaint_history" not in _table_names(empty_migration_database)

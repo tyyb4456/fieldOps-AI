@@ -9,6 +9,7 @@ from sqlalchemy.orm import configure_mappers
 from app.db.base import Base
 from app.models import (
     Complaint,
+    ComplaintHistory,
     CompletionReport,
     Conversation,
     Customer,
@@ -30,6 +31,7 @@ EXPECTED_TABLES = {
     "technicians",
     "equipment",
     "complaints",
+    "complaint_history",
     "conversations",
     "messages",
     "work_orders",
@@ -47,6 +49,7 @@ EXPECTED_MODELS = {
     "Technician": Technician,
     "Equipment": Equipment,
     "Complaint": Complaint,
+    "ComplaintHistory": ComplaintHistory,
     "Conversation": Conversation,
     "Message": Message,
     "WorkOrder": WorkOrder,
@@ -74,7 +77,9 @@ EXPECTED_RELATIONSHIPS = {
         "conversations",
         "work_order",
         "workflow_runs",
+        "history",
     },
+    ComplaintHistory: {"complaint"},
     Conversation: {"complaint", "messages"},
     Message: {"conversation"},
     WorkOrder: {
@@ -93,12 +98,12 @@ EXPECTED_RELATIONSHIPS = {
 }
 
 
-def test_all_fourteen_models_are_registered() -> None:
+def test_all_fifteen_models_are_registered() -> None:
     configure_mappers()
 
     table_names = set(Base.metadata.tables)
     assert table_names == EXPECTED_TABLES
-    assert len(table_names) == 14
+    assert len(table_names) == 15
 
     for name, model in EXPECTED_MODELS.items():
         assert model.__name__ == name
@@ -123,7 +128,12 @@ RESTRICT_RELATIONSHIPS = {
     Customer: {"equipment", "complaints"},
     Technician: {"assignments", "service_records"},
     Equipment: {"complaints", "work_orders", "service_records"},
-    Complaint: {"conversations", "work_order", "workflow_runs"},
+    Complaint: {
+        "conversations",
+        "work_order",
+        "workflow_runs",
+        "history",
+    },
     Conversation: {"messages"},
     WorkOrder: {
         "assignments",
@@ -169,6 +179,7 @@ def test_jsonb_columns_are_declared() -> None:
     jsonb_columns = {
         (Technician.__tablename__, "skills"),
         (Complaint.__tablename__, "reported_symptoms"),
+        (ComplaintHistory.__tablename__, "changed_fields"),
         (WorkOrder.__tablename__, "diagnostic_checklist"),
         (ServiceRecord.__tablename__, "parts_used"),
         (DocumentChunk.__tablename__, "metadata"),
@@ -184,6 +195,7 @@ def test_timestamps_are_timezone_aware() -> None:
         (User.__tablename__, "created_at"),
         (Complaint.__tablename__, "created_at"),
         (Complaint.__tablename__, "updated_at"),
+        (ComplaintHistory.__tablename__, "created_at"),
         (WorkOrder.__tablename__, "created_at"),
         (WorkOrder.__tablename__, "updated_at"),
         (TechnicianAssignment.__tablename__, "assigned_at"),
@@ -248,3 +260,19 @@ def test_clerk_identity_is_unique_and_optional() -> None:
 
 def test_password_hash_is_optional_for_clerk_accounts() -> None:
     assert User.__table__.c["password_hash"].nullable is True
+
+
+def test_complaint_history_sequence_is_unique_per_complaint() -> None:
+    table = ComplaintHistory.__table__
+
+    assert table.c["sequence_number"].nullable is False
+
+    constraint = next(
+        constraint
+        for constraint in table.constraints
+        if constraint.name == "uq_complaint_history_complaint_sequence"
+    )
+    assert [column.name for column in constraint.columns] == [
+        "complaint_id",
+        "sequence_number",
+    ]
