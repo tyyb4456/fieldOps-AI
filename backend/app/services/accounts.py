@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, inspect as sa_inspect, select
 from sqlalchemy.exc import IntegrityError
@@ -22,10 +23,16 @@ from app.services.clerk_auth import (
     ClerkProfile,
     fetch_clerk_profile,
 )
+from app.services.email import normalize_email
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_FULL_NAME = "FieldOps User"
+PUBLIC_LINKABLE_ROLES = frozenset({UserRole.CUSTOMER})
+
+MAX_PROFILE_ENRICHMENT_ATTEMPTS = 5
+PROFILE_ENRICHMENT_BASE_BACKOFF_SECONDS = 15 * 60
+PROFILE_ENRICHMENT_MAX_BACKOFF_SECONDS = 24 * 60 * 60
 
 
 class AccountConflictError(Exception):
@@ -38,6 +45,16 @@ class ProfileInvariantError(Exception):
 
 class AccountNotFoundError(Exception):
     """Raised when a requested account does not exist."""
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _user_load_options() -> tuple:
@@ -59,16 +76,34 @@ async def _find_by_clerk_id(
     return result.scalar_one_or_none()
 
 
+async def find_user_by_clerk_id(
+    session: AsyncSession,
+    clerk_user_id: str,
+) -> User | None:
+    return await _find_by_clerk_id(session, clerk_user_id)
+
+
 async def _find_by_email(
     session: AsyncSession,
     email: str,
 ) -> User | None:
+    normalized = normalize_email(email)
+    if normalized is None:
+        return None
+
     result = await session.execute(
         select(User)
         .options(*_user_load_options())
-        .where(User.email == email)
+        .where(func.lower(func.trim(User.email)) == normalized)
+        .limit(2)
     )
-    return result.scalar_one_or_none()
+    users = list(result.scalars().all())
+    if len(users) > 1:
+        raise AccountConflictError(
+            "Multiple local accounts share this email address; "
+            "operator resolution is required"
+        )
+    return users[0] if users else None
 
 
 async def _find_by_phone(
@@ -83,22 +118,89 @@ async def _find_by_phone(
     return result.scalar_one_or_none()
 
 
-async def _resolve_profile(identity: ClerkIdentity) -> ClerkProfile:
+def _merge_profiles(
+    token_profile: ClerkProfile,
+    fetched: ClerkProfile,
+) -> ClerkProfile:
+    if fetched.email and fetched.email_verified:
+        email = normalize_email(fetched.email)
+        email_verified = True
+    elif token_profile.email and token_profile.email_verified:
+        email = normalize_email(token_profile.email)
+        email_verified = True
+    elif fetched.email:
+        email = normalize_email(fetched.email)
+        email_verified = fetched.email_verified
+    else:
+        email = normalize_email(token_profile.email)
+        email_verified = token_profile.email_verified
+
+    if fetched.phone and fetched.phone_verified:
+        phone = fetched.phone
+        phone_verified = True
+    elif token_profile.phone and token_profile.phone_verified:
+        phone = token_profile.phone
+        phone_verified = True
+    elif fetched.phone:
+        phone = fetched.phone
+        phone_verified = fetched.phone_verified
+    else:
+        phone = token_profile.phone
+        phone_verified = token_profile.phone_verified
+
+    return ClerkProfile(
+        email=email,
+        email_verified=email_verified,
+        phone=phone,
+        phone_verified=phone_verified,
+        full_name=fetched.full_name or token_profile.full_name,
+    )
+
+
+async def _resolve_profile(
+    identity: ClerkIdentity,
+) -> tuple[ClerkProfile, bool]:
+    """Resolve a profile for a new account.
+
+    Returns the resolved profile and whether a Clerk Backend API lookup was
+    attempted. Returning the flag allows the caller to record a bounded
+    enrichment attempt when the API is temporarily unavailable.
+    """
     profile = identity.profile
     if profile.email and profile.email_verified:
-        return profile
+        return profile, False
 
     fetched = await fetch_clerk_profile(identity.clerk_user_id)
     if fetched is None:
-        return profile
+        return profile, True
 
-    return ClerkProfile(
-        email=fetched.email or profile.email,
-        email_verified=fetched.email_verified or profile.email_verified,
-        phone=fetched.phone or profile.phone,
-        phone_verified=fetched.phone_verified or profile.phone_verified,
-        full_name=fetched.full_name or profile.full_name,
-    )
+    return _merge_profiles(profile, fetched), True
+
+
+async def _assert_email_available(
+    session: AsyncSession,
+    email: str,
+    *,
+    exclude_user_id: uuid.UUID | None = None,
+) -> None:
+    existing = await _find_by_email(session, email)
+    if existing is not None and existing.id != exclude_user_id:
+        raise AccountConflictError(
+            "A different account already uses this email address"
+        )
+
+
+async def _assert_phone_available(
+    session: AsyncSession,
+    phone: str,
+    *,
+    exclude_user_id: uuid.UUID | None = None,
+) -> None:
+    existing = await _find_by_phone(session, phone)
+    if existing is not None and existing.id != exclude_user_id:
+        raise AccountConflictError(
+            "A different account already uses this phone number"
+        )
 
 
 async def _assert_no_identity_conflicts(
@@ -110,18 +212,18 @@ async def _assert_no_identity_conflicts(
     profile = identity.profile
 
     if profile.email and profile.email_verified:
-        existing = await _find_by_email(session, profile.email)
-        if existing is not None and existing.id != exclude_user_id:
-            raise AccountConflictError(
-                "A different account already uses this email address"
-            )
+        await _assert_email_available(
+            session,
+            profile.email,
+            exclude_user_id=exclude_user_id,
+        )
 
     if profile.phone and profile.phone_verified:
-        existing = await _find_by_phone(session, profile.phone)
-        if existing is not None and existing.id != exclude_user_id:
-            raise AccountConflictError(
-                "A different account already uses this phone number"
-            )
+        await _assert_phone_available(
+            session,
+            profile.phone,
+            exclude_user_id=exclude_user_id,
+        )
 
 
 def _fallback_full_name(profile: ClerkProfile) -> str:
@@ -134,39 +236,159 @@ def _fallback_full_name(profile: ClerkProfile) -> str:
     return DEFAULT_FULL_NAME
 
 
-async def _sync_profile(
+async def _apply_verified_profile(
     session: AsyncSession,
     user: User,
-    identity: ClerkIdentity,
-) -> None:
-    profile = identity.profile
+    profile: ClerkProfile,
+) -> bool:
+    """Apply verified Clerk identity fields without overwriting local data.
 
+    Returns True when a verified email is present on the account afterwards.
+    """
     if profile.full_name and user.full_name == DEFAULT_FULL_NAME:
         user.full_name = profile.full_name
+
+    if user.email is not None:
+        normalized_existing = normalize_email(user.email)
+        if (
+            normalized_existing is not None
+            and normalized_existing != user.email
+        ):
+            await _assert_email_available(
+                session,
+                normalized_existing,
+                exclude_user_id=user.id,
+            )
+            user.email = normalized_existing
 
     if (
         user.email is None
         and profile.email
         and profile.email_verified
     ):
-        await _assert_no_identity_conflicts(
-            session,
-            identity,
-            exclude_user_id=user.id,
-        )
-        user.email = profile.email
+        normalized = normalize_email(profile.email)
+        if normalized is not None:
+            await _assert_email_available(
+                session,
+                normalized,
+                exclude_user_id=user.id,
+            )
+            user.email = normalized
 
     if (
         user.phone is None
         and profile.phone
         and profile.phone_verified
     ):
-        await _assert_no_identity_conflicts(
+        await _assert_phone_available(
             session,
-            identity,
+            profile.phone,
             exclude_user_id=user.id,
         )
         user.phone = profile.phone
+
+    return bool(user.email)
+
+
+async def _sync_profile(
+    session: AsyncSession,
+    user: User,
+    identity: ClerkIdentity,
+) -> None:
+    applied = await _apply_verified_profile(
+        session,
+        user,
+        identity.profile,
+    )
+    if applied:
+        _mark_profile_enriched(user, _utcnow())
+
+
+def _need_profile_enrichment(user: User) -> bool:
+    return not user.email
+
+
+def _enrichment_backoff(attempts: int) -> timedelta:
+    if attempts <= 0:
+        return timedelta(0)
+    exponent = min(attempts - 1, 10)
+    seconds = min(
+        PROFILE_ENRICHMENT_BASE_BACKOFF_SECONDS * (2**exponent),
+        PROFILE_ENRICHMENT_MAX_BACKOFF_SECONDS,
+    )
+    return timedelta(seconds=seconds)
+
+
+def _can_attempt_enrichment(user: User, now: datetime) -> bool:
+    if user.profile_enrichment_attempts >= MAX_PROFILE_ENRICHMENT_ATTEMPTS:
+        return False
+    last_attempt = user.profile_enrichment_last_attempt_at
+    if last_attempt is None:
+        return True
+    return (
+        now - _as_utc(last_attempt)
+        >= _enrichment_backoff(user.profile_enrichment_attempts)
+    )
+
+
+def _record_enrichment_attempt(user: User, now: datetime) -> None:
+    user.profile_enrichment_attempts += 1
+    user.profile_enrichment_last_attempt_at = now
+
+
+def _mark_profile_enriched(user: User, now: datetime) -> None:
+    user.profile_enriched_at = now
+    user.profile_enrichment_attempts = 0
+    user.profile_enrichment_last_attempt_at = None
+
+
+async def _maybe_enrich_profile(
+    session: AsyncSession,
+    user: User,
+    identity: ClerkIdentity,
+) -> None:
+    if not _need_profile_enrichment(user):
+        if user.profile_enriched_at is None:
+            _mark_profile_enriched(user, _utcnow())
+        return
+
+    now = _utcnow()
+    if not _can_attempt_enrichment(user, now):
+        return
+
+    _record_enrichment_attempt(user, now)
+    fetched = await fetch_clerk_profile(
+        user.clerk_user_id or identity.clerk_user_id
+    )
+    if fetched is None:
+        logger.info(
+            "Clerk profile enrichment deferred",
+            extra={
+                "user_id": str(user.id),
+                "attempts": user.profile_enrichment_attempts,
+            },
+        )
+        return
+
+    merged = _merge_profiles(identity.profile, fetched)
+    applied = await _apply_verified_profile(session, user, merged)
+    if applied:
+        _mark_profile_enriched(user, now)
+        logger.info(
+            "Clerk profile enrichment completed",
+            extra={
+                "user_id": str(user.id),
+                "attempts": user.profile_enrichment_attempts,
+            },
+        )
+    else:
+        logger.info(
+            "Clerk profile has no verified email; enrichment remains pending",
+            extra={
+                "user_id": str(user.id),
+                "attempts": user.profile_enrichment_attempts,
+            },
+        )
 
 
 def _raise_profile_invariant(user: User, detail: str) -> None:
@@ -194,6 +416,50 @@ async def _ensure_profiles_loaded(
         return
 
     await session.refresh(user, missing)
+
+
+async def validate_profile_invariant(
+    session: AsyncSession,
+    user: User,
+) -> None:
+    """Validate role/profile consistency without creating or modifying rows."""
+    await _ensure_profiles_loaded(session, user)
+
+    if user.role == UserRole.CUSTOMER:
+        if user.technician is not None:
+            _raise_profile_invariant(
+                user,
+                "customer role with a technician profile",
+            )
+        if user.customer is None:
+            _raise_profile_invariant(
+                user,
+                "customer role without a customer profile",
+            )
+        return
+
+    if user.role == UserRole.TECHNICIAN:
+        if user.customer is not None:
+            _raise_profile_invariant(
+                user,
+                "technician role with a customer profile",
+            )
+        if user.technician is None:
+            _raise_profile_invariant(
+                user,
+                "technician role without a technician profile",
+            )
+        return
+
+    if user.role == UserRole.ADMIN:
+        if user.customer is not None or user.technician is not None:
+            _raise_profile_invariant(
+                user,
+                "admin role with an operational profile",
+            )
+        return
+
+    _raise_profile_invariant(user, f"unsupported role {user.role!r}")
 
 
 async def ensure_profile_invariant(
@@ -238,19 +504,33 @@ async def ensure_profile_invariant(
 async def _create_user(
     session: AsyncSession,
     identity: ClerkIdentity,
+    *,
+    enrichment_attempted: bool,
 ) -> User:
     profile = identity.profile
     await _assert_no_identity_conflicts(session, identity)
 
+    now = _utcnow()
+    email = (
+        normalize_email(profile.email)
+        if profile.email_verified
+        else None
+    )
     user = User(
         full_name=_fallback_full_name(profile),
-        email=profile.email if profile.email_verified else None,
+        email=email,
         phone=profile.phone if profile.phone_verified else None,
         clerk_user_id=identity.clerk_user_id,
         password_hash=None,
         role=UserRole.CUSTOMER,
         is_active=True,
     )
+    if user.email is not None:
+        user.profile_enriched_at = now
+    elif enrichment_attempted:
+        user.profile_enrichment_attempts = 1
+        user.profile_enrichment_last_attempt_at = now
+
     user.customer = Customer()
     user.technician = None
     session.add(user)
@@ -265,22 +545,34 @@ async def _provision(
 
     if user is not None:
         await _sync_profile(session, user, identity)
+        await _maybe_enrich_profile(session, user, identity)
         await ensure_profile_invariant(session, user)
         return user
 
-    profile = await _resolve_profile(identity)
+    profile, enrichment_attempted = await _resolve_profile(identity)
     if profile is not identity.profile:
         identity = replace(identity, profile=profile)
 
-    user = await _find_by_email(
-        session,
-        identity.profile.email,
-    ) if (
-        identity.profile.email
-        and identity.profile.email_verified
-    ) else None
+    user = (
+        await _find_by_email(session, identity.profile.email)
+        if identity.profile.email and identity.profile.email_verified
+        else None
+    )
 
     if user is not None:
+        if user.role not in PUBLIC_LINKABLE_ROLES:
+            logger.warning(
+                "Rejected automatic Clerk linking for privileged account",
+                extra={
+                    "user_id": str(user.id),
+                    "role": user.role.value,
+                    "clerk_user_id": identity.clerk_user_id,
+                },
+            )
+            raise AccountConflictError(
+                "Privileged accounts require explicit operator linking"
+            )
+
         if (
             user.clerk_user_id is not None
             and user.clerk_user_id != identity.clerk_user_id
@@ -288,12 +580,28 @@ async def _provision(
             raise AccountConflictError(
                 "This email address is already linked to another identity"
             )
+
         user.clerk_user_id = identity.clerk_user_id
         await _sync_profile(session, user, identity)
+        await _maybe_enrich_profile(session, user, identity)
         await ensure_profile_invariant(session, user)
+        _mark_profile_enriched(user, _utcnow())
+        logger.info(
+            "Linked local account to Clerk identity",
+            extra={
+                "user_id": str(user.id),
+                "role": user.role.value,
+                "clerk_user_id": identity.clerk_user_id,
+                "link_source": "verified_email",
+            },
+        )
         return user
 
-    return await _create_user(session, identity)
+    return await _create_user(
+        session,
+        identity,
+        enrichment_attempted=enrichment_attempted,
+    )
 
 
 async def provision_user(
@@ -321,12 +629,70 @@ async def get_or_provision_user(
                 "conflicting identity"
             ) from exc
         await _sync_profile(session, user, identity)
+        await _maybe_enrich_profile(session, user, identity)
         await ensure_profile_invariant(session, user)
         await session.commit()
         return user
     except Exception:
         await session.rollback()
         raise
+
+
+async def link_clerk_identity(
+    session: AsyncSession,
+    user: User,
+    *,
+    clerk_user_id: str,
+    profile: ClerkProfile,
+) -> User:
+    """Explicitly link an operator-verified local account to Clerk.
+
+    The caller is responsible for verifying the Clerk identity out-of-band and
+    obtaining its profile. This operation never changes the user's role.
+    """
+    normalized_profile_email = normalize_email(profile.email)
+    normalized_user_email = normalize_email(user.email)
+
+    if not normalized_profile_email or not profile.email_verified:
+        raise AccountConflictError(
+            "The Clerk identity does not have a verified email address"
+        )
+    if normalized_user_email is None:
+        raise AccountConflictError(
+            "The local account has no email address to verify against"
+        )
+    if normalized_user_email != normalized_profile_email:
+        raise AccountConflictError(
+            "The Clerk verified email does not match the local account"
+        )
+    if (
+        user.clerk_user_id is not None
+        and user.clerk_user_id != clerk_user_id
+    ):
+        raise AccountConflictError(
+            "The local account is already linked to a different "
+            "Clerk identity"
+        )
+
+    existing = await _find_by_clerk_id(session, clerk_user_id)
+    if existing is not None and existing.id != user.id:
+        raise AccountConflictError(
+            "The Clerk identity is already linked to another local account"
+        )
+
+    user.clerk_user_id = clerk_user_id
+    await _apply_verified_profile(session, user, profile)
+    _mark_profile_enriched(user, _utcnow())
+    logger.info(
+        "Operator linked local account to Clerk identity",
+        extra={
+            "user_id": str(user.id),
+            "role": user.role.value,
+            "clerk_user_id": clerk_user_id,
+            "link_source": "operator",
+        },
+    )
+    return user
 
 
 async def _count_customer_dependents(

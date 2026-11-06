@@ -6,13 +6,20 @@ import {
   type ReactNode,
 } from 'react'
 import { useAuth } from '@clerk/react'
-import { ApiError, fetchCurrentUser, type CurrentUser } from '../lib/api'
+import {
+  ApiError,
+  bootstrapCurrentUser,
+  fetchCurrentUser,
+  type CurrentUser,
+} from '../lib/api'
+import { classifyAuthError } from './auth-errors'
 import { AppAuthContext, type AppAuthState } from './app-auth-context'
 
 export function AppAuthProvider({ children }: { children: ReactNode }) {
   const { isLoaded, isSignedIn, getToken, signOut } = useAuth()
   const [user, setUser] = useState<CurrentUser | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [isUnauthorized, setIsUnauthorized] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
 
@@ -31,11 +38,13 @@ export function AppAuthProvider({ children }: { children: ReactNode }) {
       if (!isSignedIn) {
         setUser(null)
         setError(null)
+        setIsUnauthorized(false)
         setIsLoading(false)
         return
       }
 
       setIsLoading(true)
+      setIsUnauthorized(false)
       setError(null)
 
       try {
@@ -48,7 +57,17 @@ export function AppAuthProvider({ children }: { children: ReactNode }) {
           )
         }
 
-        const currentUser = await fetchCurrentUser(token)
+        let currentUser: CurrentUser
+        try {
+          currentUser = await fetchCurrentUser(token)
+        } catch (caught) {
+          const failure = classifyAuthError(caught)
+          if (failure.kind !== 'not-provisioned') {
+            throw caught
+          }
+          currentUser = await bootstrapCurrentUser(token)
+        }
+
         if (!cancelled) {
           setUser(currentUser)
         }
@@ -57,14 +76,23 @@ export function AppAuthProvider({ children }: { children: ReactNode }) {
           return
         }
 
-        if (caught instanceof ApiError && caught.status === 401) {
+        const failure = classifyAuthError(caught)
+
+        if (failure.kind === 'sign-out') {
+          setUser(null)
           await signOut()
           return
         }
 
+        if (failure.kind === 'unauthorized') {
+          setUser(null)
+          setIsUnauthorized(true)
+          return
+        }
+
         setError(
-          caught instanceof Error
-            ? caught.message
+          failure.kind === 'error'
+            ? failure.message
             : 'Unable to load your FieldOps account.',
         )
       } finally {
@@ -82,8 +110,8 @@ export function AppAuthProvider({ children }: { children: ReactNode }) {
   }, [getToken, isLoaded, isSignedIn, reloadKey, signOut])
 
   const value = useMemo<AppAuthState>(
-    () => ({ user, isLoading, error, refresh }),
-    [error, isLoading, refresh, user],
+    () => ({ user, isLoading, isUnauthorized, error, refresh }),
+    [error, isLoading, isUnauthorized, refresh, user],
   )
 
   return (

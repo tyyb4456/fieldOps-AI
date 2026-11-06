@@ -14,15 +14,19 @@ export function ProtectedRoute({
   allowedRoles,
   children,
 }: ProtectedRouteProps) {
-  const { user, isLoading, error, refresh } = useAppAuth()
+  const { user, isLoading, isUnauthorized, error, refresh } = useAppAuth()
   const location = useLocation()
 
   if (isLoading) {
-    return <LoadingScreen label="Checking your session…" />
+    return <LoadingScreen label="Checking your session�?�" />
   }
 
   if (error) {
     return <ErrorScreen message={error} onRetry={refresh} />
+  }
+
+  if (isUnauthorized) {
+    return <Navigate to="/unauthorized" replace />
   }
 
   if (!user) {

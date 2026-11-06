@@ -8,6 +8,8 @@ Usage:
         --role admin
     python -m app.scripts.manage_roles set-role --user-id <uuid> \\
         --role technician
+    python -m app.scripts.manage_roles link-identity --email user@example.com \\
+        --clerk-user-id user_xxx
 
 This command never reads Clerk metadata and never trusts frontend input.
 """
@@ -26,13 +28,18 @@ from app.services.accounts import (
     ProfileInvariantError,
     get_user_by_email,
     get_user_by_id,
+    link_clerk_identity,
     set_user_role,
 )
+from app.services.clerk_auth import fetch_clerk_profile
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Assign an application role to a provisioned user.",
+        description=(
+            "Assign an application role or link a Clerk identity to a "
+            "provisioned user."
+        ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -49,10 +56,29 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=[role.value for role in UserRole],
     )
 
+    link_identity = subparsers.add_parser(
+        "link-identity",
+        help=(
+            "Explicitly bind an existing local account to a Clerk identity "
+            "without changing its role."
+        ),
+    )
+    link_target = link_identity.add_mutually_exclusive_group(required=True)
+    link_target.add_argument("--user-id", type=uuid.UUID)
+    link_target.add_argument("--email")
+    link_identity.add_argument(
+        "--clerk-user-id",
+        required=True,
+        help="Clerk user ID (user_...) verified by the operator.",
+    )
+
     return parser
 
 
 async def _run(args: argparse.Namespace) -> int:
+    if args.command == "link-identity":
+        return await _link_identity(args)
+
     role = UserRole(args.role)
 
     try:
@@ -77,6 +103,46 @@ async def _run(args: argparse.Namespace) -> int:
         await dispose_engine()
 
     print(f"Updated user role to {role.value}.")
+    return 0
+
+
+async def _link_identity(args: argparse.Namespace) -> int:
+    try:
+        profile = await fetch_clerk_profile(args.clerk_user_id)
+        if profile is None:
+            print(
+                "error: unable to verify the Clerk identity. Check "
+                "CLERK_SECRET_KEY and network connectivity.",
+                file=sys.stderr,
+            )
+            return 1
+
+        async with async_session_factory() as session:
+            if args.user_id is not None:
+                user = await get_user_by_id(session, args.user_id)
+            else:
+                user = await get_user_by_email(session, args.email)
+            await link_clerk_identity(
+                session,
+                user,
+                clerk_user_id=args.clerk_user_id,
+                profile=profile,
+            )
+            await session.commit()
+    except (
+        AccountConflictError,
+        AccountNotFoundError,
+        ProfileInvariantError,
+    ) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        await dispose_engine()
+
+    print("Linked local account to the verified Clerk identity.")
     return 0
 
 

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, String, Text, true
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, text, true
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, CreatedAtMixin, UUIDPrimaryKeyMixin
@@ -45,6 +46,19 @@ class User(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         nullable=False,
         default=True,
         server_default=true(),
+    )
+    profile_enrichment_attempts: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    profile_enrichment_last_attempt_at: Mapped[datetime | None] = (
+        mapped_column(DateTime(timezone=True), nullable=True)
+    )
+    profile_enriched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
 
     customer: Mapped[Customer | None] = relationship(

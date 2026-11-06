@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 from fastapi import Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
+from app.api.dependencies.rate_limit import rate_limited_error
 from app.core.exceptions import AppError
 from app.db.session import get_db_session
 from app.models.enums import UserRole
@@ -13,13 +15,22 @@ from app.models.user import User
 from app.services.accounts import (
     AccountConflictError,
     ProfileInvariantError,
+    find_user_by_clerk_id,
     get_or_provision_user,
+    validate_profile_invariant,
 )
 from app.services.clerk_auth import (
     ClerkAuthenticationError,
     ClerkConfigurationError,
+    ClerkIdentity,
     verify_clerk_token,
 )
+from app.services.rate_limit import (
+    RateLimitExceeded,
+    enforce_bootstrap_subject_limit,
+)
+
+logger = logging.getLogger(__name__)
 
 UNAUTHENTICATED_HEADERS = {"WWW-Authenticate": "Bearer"}
 
@@ -33,12 +44,19 @@ def unauthenticated_error() -> AppError:
     )
 
 
-async def get_current_user(
+def account_inactive_error() -> AppError:
+    return AppError(
+        "This account is inactive.",
+        status_code=status.HTTP_403_FORBIDDEN,
+        code="account_inactive",
+    )
+
+
+async def get_authenticated_identity(
     request: Request,
-    session: AsyncSession = Depends(get_db_session),
-) -> User:
+) -> ClerkIdentity:
     try:
-        identity = await run_in_threadpool(verify_clerk_token, request)
+        return await run_in_threadpool(verify_clerk_token, request)
     except ClerkConfigurationError as exc:
         raise AppError(
             "Authentication is not configured.",
@@ -47,6 +65,62 @@ async def get_current_user(
         ) from exc
     except ClerkAuthenticationError as exc:
         raise unauthenticated_error() from exc
+    except Exception as exc:
+        # The Clerk verification boundary must not turn unexpected SDK or
+        # network failures into a 500 (which would also hide the WWW-
+        # Authenticate challenge). Only this boundary is normalized; database
+        # and unrelated application errors remain 500 responses.
+        logger.warning(
+            "Unexpected Clerk authentication failure",
+            extra={
+                "error_type": type(exc).__name__,
+                "path": request.url.path,
+                "request_id": getattr(request.state, "request_id", None),
+            },
+        )
+        raise unauthenticated_error() from exc
+
+
+async def get_current_user(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+) -> User:
+    """Return an existing user without provisioning or modifying records."""
+    identity = await get_authenticated_identity(request)
+    user = await find_user_by_clerk_id(session, identity.clerk_user_id)
+    if user is None:
+        raise AppError(
+            "No FieldOps account exists for this identity. "
+            "Complete account bootstrap first.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="account_not_provisioned",
+        )
+
+    if not user.is_active:
+        raise account_inactive_error()
+
+    try:
+        await validate_profile_invariant(session, user)
+    except ProfileInvariantError as exc:
+        raise AppError(
+            "Account configuration is invalid. Contact support.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="account_configuration_error",
+        ) from exc
+
+    return user
+
+
+async def get_provisioned_current_user(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    identity: ClerkIdentity = Depends(get_authenticated_identity),
+) -> User:
+    """Provision or reconcile the caller's account during bootstrap."""
+    try:
+        enforce_bootstrap_subject_limit(identity.clerk_user_id)
+    except RateLimitExceeded as exc:
+        raise rate_limited_error(exc) from exc
 
     try:
         user = await get_or_provision_user(session, identity)
@@ -65,11 +139,7 @@ async def get_current_user(
         ) from exc
 
     if not user.is_active:
-        raise AppError(
-            "This account is inactive.",
-            status_code=status.HTTP_403_FORBIDDEN,
-            code="account_inactive",
-        )
+        raise account_inactive_error()
 
     return user
 

@@ -39,6 +39,7 @@ from sqlalchemy.pool import NullPool
 from app.core.config import settings
 from app.db.session import get_db_session
 from app.main import app
+from app.services.rate_limit import reset_rate_limiters
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
@@ -300,3 +301,11 @@ async def api_client(
 def reset_dependency_overrides() -> Iterator[None]:
     yield
     app.dependency_overrides.clear()
+    reset_rate_limiters()
+
+
+@pytest.fixture(autouse=True)
+def reset_auth_rate_limiters() -> Iterator[None]:
+    reset_rate_limiters()
+    yield
+    reset_rate_limiters()

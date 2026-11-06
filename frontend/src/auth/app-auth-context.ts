@@ -4,6 +4,7 @@ import type { CurrentUser } from '../lib/api'
 export interface AppAuthState {
   user: CurrentUser | null
   isLoading: boolean
+  isUnauthorized: boolean
   error: string | null
   refresh: () => void
 }

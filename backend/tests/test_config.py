@@ -24,6 +24,9 @@ ENV_KEYS = (
     "CLERK_SECRET_KEY",
     "CLERK_JWT_KEY",
     "CLERK_AUTHORIZED_PARTIES",
+    "AUTH_BOOTSTRAP_RATE_LIMIT_PER_IP",
+    "AUTH_BOOTSTRAP_RATE_LIMIT_PER_SUBJECT",
+    "AUTH_BOOTSTRAP_RATE_LIMIT_WINDOW_SECONDS",
 )
 
 PRODUCTION_DATABASE_URL = (
@@ -64,6 +67,22 @@ def test_default_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.cors_allow_credentials is True
     assert settings.log_level == "INFO"
     assert settings.db_require_tls is True
+    assert settings.auth_bootstrap_rate_limit_per_ip == 30
+    assert settings.auth_bootstrap_rate_limit_per_subject == 10
+    assert settings.auth_bootstrap_rate_limit_window_seconds == 60
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "auth_bootstrap_rate_limit_per_ip",
+        "auth_bootstrap_rate_limit_per_subject",
+        "auth_bootstrap_rate_limit_window_seconds",
+    ],
+)
+def test_rate_limit_settings_must_be_positive(field: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **{field: 0})
 
 
 def test_database_url_is_normalized_to_asyncpg() -> None:

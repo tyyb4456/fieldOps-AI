@@ -351,5 +351,111 @@ def test_clerk_identity_migration_downgrade_requires_password_hashes(
                 )
             ).scalar_one()
 
-    assert version == "0003_clerk_identity"
+    assert version == "0005_profile_enrichment"
     assert clerk_user_id == "user_clerk_test"
+
+
+def test_email_normalization_migration_normalizes_existing_rows(
+    empty_migration_database: MigrationDatabase,
+) -> None:
+    command.upgrade(
+        empty_migration_database.config,
+        "0003_clerk_identity",
+    )
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO users (full_name, email, role) VALUES "
+                    "('Mixed', '  Mixed@Example.COM  ', 'customer'), "
+                    "('Plain', 'plain@example.com', 'customer')"
+                )
+            )
+
+    command.upgrade(
+        empty_migration_database.config,
+        "0004_normalize_emails",
+    )
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT full_name, email FROM users "
+                    "ORDER BY full_name"
+                )
+            ).all()
+
+    assert (rows[0].full_name, rows[0].email) == (
+        "Mixed",
+        "mixed@example.com",
+    )
+    assert (rows[1].full_name, rows[1].email) == (
+        "Plain",
+        "plain@example.com",
+    )
+
+
+def test_email_normalization_migration_aborts_on_duplicates(
+    empty_migration_database: MigrationDatabase,
+) -> None:
+    command.upgrade(
+        empty_migration_database.config,
+        "0003_clerk_identity",
+    )
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO users (full_name, email, role) VALUES "
+                    "('First', 'dup@example.com', 'customer'), "
+                    "('Second', 'Dup@Example.com', 'customer')"
+                )
+            )
+
+    with pytest.raises(RuntimeError, match="case-insensitive"):
+        command.upgrade(
+            empty_migration_database.config,
+            "0004_normalize_emails",
+        )
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            version = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+
+    assert version == "0003_clerk_identity"
+
+
+def test_profile_enrichment_migration_adds_and_removes_columns(
+    empty_migration_database: MigrationDatabase,
+) -> None:
+    command.upgrade(empty_migration_database.config, "head")
+
+    with _sync_engine(empty_migration_database) as engine:
+        columns = {
+            column["name"]: column
+            for column in inspect(engine).get_columns("users")
+        }
+
+    assert columns["profile_enrichment_attempts"]["nullable"] is False
+    assert columns["profile_enrichment_last_attempt_at"]["nullable"] is True
+    assert columns["profile_enriched_at"]["nullable"] is True
+
+    command.downgrade(
+        empty_migration_database.config,
+        "0004_normalize_emails",
+    )
+
+    with _sync_engine(empty_migration_database) as engine:
+        columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("users")
+        }
+
+    assert "profile_enrichment_attempts" not in columns
+    assert "profile_enrichment_last_attempt_at" not in columns
+    assert "profile_enriched_at" not in columns

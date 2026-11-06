@@ -1,3 +1,8 @@
+import { ApiError } from './api-error'
+import { resolveApiBaseUrl } from './api-url'
+
+export { ApiError } from './api-error'
+
 export type UserRole = 'customer' | 'technician' | 'admin'
 
 export interface CurrentUser {
@@ -18,26 +23,21 @@ interface ApiErrorPayload {
   }
 }
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+const API_BASE_URL = resolveApiBaseUrl(
+  import.meta.env.VITE_API_BASE_URL,
+  { isProduction: import.meta.env.PROD },
+)
 
-export class ApiError extends Error {
-  readonly status: number
-  readonly code: string
-
-  constructor(status: number, code: string, message: string) {
-    super(message)
-    this.name = 'ApiError'
-    this.status = status
-    this.code = code
-  }
-}
-
-export async function fetchCurrentUser(token: string): Promise<CurrentUser> {
+async function requestCurrentUser(
+  path: string,
+  method: 'GET' | 'POST',
+  token: string,
+): Promise<CurrentUser> {
   let response: Response
 
   try {
-    response = await fetch(`${API_BASE_URL}/api/v1/users/me`, {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method,
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: 'application/json',
@@ -67,4 +67,14 @@ export async function fetchCurrentUser(token: string): Promise<CurrentUser> {
   }
 
   return (await response.json()) as CurrentUser
+}
+
+export async function fetchCurrentUser(token: string): Promise<CurrentUser> {
+  return requestCurrentUser('/api/v1/users/me', 'GET', token)
+}
+
+export async function bootstrapCurrentUser(
+  token: string,
+): Promise<CurrentUser> {
+  return requestCurrentUser('/api/v1/auth/bootstrap', 'POST', token)
 }

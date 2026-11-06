@@ -11,6 +11,7 @@ from clerk_backend_api.security.types import AuthenticateRequestOptions
 from starlette.requests import Request
 
 from app.core.config import settings
+from app.services.email import normalize_email
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,41 @@ class ClerkIdentity:
     session_id: str | None
     claims: Mapping[str, Any]
     profile: ClerkProfile
+
+
+class _BearerOnlyRequest:
+    """Minimal request view containing only a Bearer Authorization header.
+
+    ``authenticate_request`` falls back to the ``__session`` cookie whenever
+    no Authorization header is present. FieldOps deliberately uses Bearer-only
+    API authentication, so the SDK is given a view that cannot see cookies.
+    This uses the documented Requestish protocol rather than re-implementing
+    token verification.
+    """
+
+    __slots__ = ("headers",)
+
+    def __init__(self, token: str) -> None:
+        self.headers: Mapping[str, str] = {
+            "Authorization": f"Bearer {token}",
+        }
+
+
+def _extract_bearer_token(request: Request) -> str:
+    header = request.headers.get("authorization")
+    if header is None:
+        raise ClerkAuthenticationError("bearer-token-missing")
+
+    scheme, separator, token = header.partition(" ")
+    if separator != " " or scheme.lower() != "bearer":
+        raise ClerkAuthenticationError("unsupported-authorization-scheme")
+
+    token = token.strip()
+    if not token:
+        raise ClerkAuthenticationError("bearer-token-missing")
+    if " " in token:
+        raise ClerkAuthenticationError("malformed-bearer-token")
+    return token
 
 
 def _first_string(
@@ -83,11 +119,13 @@ def identity_from_payload(payload: Mapping[str, Any]) -> ClerkIdentity:
         session_id=session_id,
         claims=dict(payload),
         profile=ClerkProfile(
-            email=_first_string(
-                payload,
-                "email",
-                "email_address",
-                "primary_email_address",
+            email=normalize_email(
+                _first_string(
+                    payload,
+                    "email",
+                    "email_address",
+                    "primary_email_address",
+                )
             ),
             email_verified=_claim_is_true(
                 payload,
@@ -135,12 +173,16 @@ def verify_clerk_token(
             "Clerk authentication is not configured"
         )
 
+    bearer_token = _extract_bearer_token(request)
+
     state = authenticate_request(
-        request,
+        _BearerOnlyRequest(bearer_token),
         AuthenticateRequestOptions(
             secret_key=resolved_secret,
             jwt_key=resolved_jwt_key,
-            authorized_parties=resolved_parties or None,
+            # An explicitly empty list must reject every token rather than
+            # disabling authorized-party validation. Never use `or None` here.
+            authorized_parties=resolved_parties,
             accepts_token=[SESSION_TOKEN_TYPE],
         ),
     )
@@ -154,39 +196,71 @@ def verify_clerk_token(
     return identity_from_payload(state.payload)
 
 
-def _verified_primary_email(user: Any) -> str | None:
+def _primary_email(user: Any) -> tuple[str | None, bool]:
     primary_id = getattr(user, "primary_email_address_id", None)
     addresses = getattr(user, "email_addresses", None) or []
     primary = next(
         (address for address in addresses if address.id == primary_id),
         None,
     )
-    candidates = [primary] if primary is not None else addresses
-    for address in candidates:
+
+    verified_candidates = []
+    for address in addresses:
         verification = getattr(address, "verification", None)
         if getattr(verification, "status", None) == "verified":
-            return address.email_address
-    return None
+            verified_candidates.append(address)
+
+    if primary is not None:
+        verification = getattr(primary, "verification", None)
+        if getattr(verification, "status", None) == "verified":
+            return normalize_email(primary.email_address), True
+
+    if verified_candidates:
+        return normalize_email(verified_candidates[0].email_address), True
+
+    if primary is not None:
+        return normalize_email(primary.email_address), False
+
+    return None, False
 
 
-def _verified_primary_phone(user: Any) -> str | None:
+def _primary_phone(user: Any) -> tuple[str | None, bool]:
     primary_id = getattr(user, "primary_phone_number_id", None)
     numbers = getattr(user, "phone_numbers", None) or []
     primary = next(
         (number for number in numbers if number.id == primary_id),
         None,
     )
-    candidates = [primary] if primary is not None else numbers
-    for number in candidates:
+
+    verified_candidates = []
+    for number in numbers:
         verification = getattr(number, "verification", None)
         if getattr(verification, "status", None) == "verified":
-            return number.phone_number
-    return None
+            verified_candidates.append(number)
+
+    if primary is not None:
+        verification = getattr(primary, "verification", None)
+        if getattr(verification, "status", None) == "verified":
+            return primary.phone_number, True
+
+    if verified_candidates:
+        return verified_candidates[0].phone_number, True
+
+    if primary is not None:
+        return primary.phone_number, False
+
+    return None, False
 
 
 async def fetch_clerk_profile(
     clerk_user_id: str,
 ) -> ClerkProfile | None:
+    """Fetch a Clerk profile, returning None when the lookup is unavailable.
+
+    ``None`` means the Backend API could not be reached or returned an
+    unexpected response. A non-None profile may still have no verified email;
+    callers must inspect ``email_verified`` before storing identity fields.
+    """
     if not settings.clerk_secret_key:
         return None
 
@@ -196,6 +270,7 @@ async def fetch_clerk_profile(
     except Exception:
         logger.warning(
             "Unable to fetch Clerk profile for identity enrichment",
+            extra={"clerk_user_id": clerk_user_id},
             exc_info=False,
         )
         return None
@@ -207,13 +282,13 @@ async def fetch_clerk_profile(
         part for part in (first_name, last_name) if part
     ) or username
 
-    email = _verified_primary_email(user)
-    phone = _verified_primary_phone(user)
+    email, email_verified = _primary_email(user)
+    phone, phone_verified = _primary_phone(user)
 
     return ClerkProfile(
         email=email,
-        email_verified=email is not None,
+        email_verified=email_verified,
         phone=phone,
-        phone_verified=phone is not None,
+        phone_verified=phone_verified,
         full_name=full_name or None,
     )
