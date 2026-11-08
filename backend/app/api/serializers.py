@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from app.models.complaint import Complaint
 from app.models.complaint_history import ComplaintHistory
+from app.models.completion_report import CompletionReport
 from app.models.customer import Customer
+from app.models.document import Document
+from app.models.document_chunk import DocumentChunk
 from app.models.equipment import Equipment
 from app.models.service_record import ServiceRecord
 from app.models.technician import Technician
 from app.models.technician_assignment import TechnicianAssignment
 from app.models.user import User
 from app.models.work_order import WorkOrder
+from app.models.workflow_run import WorkflowRun
 from app.schemas.assignment import (
     AssignmentResponse,
     TechnicianSummaryResponse,
@@ -17,11 +21,17 @@ from app.schemas.complaint import (
     ComplaintHistoryResponse,
     ComplaintResponse,
 )
+from app.schemas.completion_report import CompletionReportResponse
 from app.schemas.customer import CustomerProfileResponse
+from app.schemas.document import (
+    DocumentChunkResponse,
+    DocumentResponse,
+)
 from app.schemas.equipment import EquipmentResponse
 from app.schemas.service_record import ServiceRecordResponse
 from app.schemas.user import UserMeResponse
 from app.schemas.work_order import WorkOrderResponse
+from app.schemas.workflow_run import WorkflowRunResponse
 
 
 def user_me_response(user: User) -> UserMeResponse:
@@ -158,4 +168,59 @@ def service_record_response(
         work_performed=service_record.work_performed,
         parts_used=service_record.parts_used,
         recorded_at=service_record.recorded_at,
+    )
+
+
+def completion_report_response(
+    completion_report: CompletionReport,
+) -> CompletionReportResponse:
+    return CompletionReportResponse(
+        id=completion_report.id,
+        work_order_id=completion_report.work_order_id,
+        service_record_id=completion_report.service_record_id,
+        summary=completion_report.summary,
+        evidence_status=completion_report.evidence_status,
+        verification_notes=completion_report.verification_notes,
+        submitted_at=completion_report.submitted_at,
+        verified_at=completion_report.verified_at,
+    )
+
+
+def document_response(document: Document) -> DocumentResponse:
+    return DocumentResponse(
+        id=document.id,
+        manufacturer=document.manufacturer,
+        model=document.model,
+        document_name=document.document_name,
+        version=document.version,
+        file_path=document.file_path,
+        is_active=document.is_active,
+        created_at=document.created_at,
+    )
+
+
+def document_chunk_response(
+    chunk: DocumentChunk,
+) -> DocumentChunkResponse:
+    return DocumentChunkResponse(
+        id=chunk.id,
+        document_id=chunk.document_id,
+        chunk_index=chunk.chunk_index,
+        content=chunk.content,
+        page_number=chunk.page_number,
+        metadata=chunk.chunk_metadata,
+    )
+
+
+def workflow_run_response(
+    workflow_run: WorkflowRun,
+) -> WorkflowRunResponse:
+    return WorkflowRunResponse(
+        id=workflow_run.id,
+        complaint_id=workflow_run.complaint_id,
+        status=workflow_run.status,
+        current_step=workflow_run.current_step,
+        started_at=workflow_run.started_at,
+        finished_at=workflow_run.finished_at,
+        error_message=workflow_run.error_message,
     )

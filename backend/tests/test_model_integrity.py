@@ -233,13 +233,17 @@ async def test_work_management_and_maintenance_records(
         work_performed="Replaced the failed DC input connector.",
         parts_used=[{"part": "DC connector", "quantity": 1}],
     )
+    db_session.add_all([assignment, service_record])
+    await db_session.flush()
     completion_report = CompletionReport(
         work_order=work_order,
+        service_record_id=service_record.id,
         summary="Inverter generation restored and verified.",
         evidence_status=EvidenceStatus.PENDING,
     )
-    db_session.add_all([assignment, service_record, completion_report])
+    db_session.add(completion_report)
     await db_session.flush()
+    await db_session.refresh(completion_report, ["service_record"])
 
     assert work_order.complaint is complaint
     assert work_order.equipment is equipment
@@ -251,6 +255,8 @@ async def test_work_management_and_maintenance_records(
     assert service_record.work_order is work_order
     assert service_record.technician is technician
     assert completion_report.work_order is work_order
+    assert completion_report.service_record is service_record
+    assert completion_report.service_record_id == service_record.id
     assert completion_report.evidence_status is EvidenceStatus.PENDING
 
 

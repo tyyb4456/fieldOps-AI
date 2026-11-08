@@ -91,7 +91,7 @@ EXPECTED_RELATIONSHIPS = {
     },
     TechnicianAssignment: {"work_order", "technician"},
     ServiceRecord: {"equipment", "work_order", "technician"},
-    CompletionReport: {"work_order"},
+    CompletionReport: {"work_order", "service_record"},
     Document: {"chunks"},
     DocumentChunk: {"document"},
     WorkflowRun: {"complaint"},
@@ -240,6 +240,10 @@ def test_composite_integrity_constraints_are_registered() -> None:
         ("complaints", "fk_complaints_equipment_customer"),
         ("work_orders", "fk_work_orders_complaint_equipment"),
         ("service_records", "fk_service_records_work_order_equipment"),
+        (
+            "completion_reports",
+            "fk_completion_reports_service_record_work_order",
+        ),
     }
 
     for table_name, constraint_name in expected_constraints:

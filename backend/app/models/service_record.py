@@ -10,6 +10,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -32,6 +33,11 @@ class ServiceRecord(UUIDPrimaryKeyMixin, Base):
             ["work_orders.id", "work_orders.equipment_id"],
             name="fk_service_records_work_order_equipment",
             ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "id",
+            "work_order_id",
+            name="uq_service_records_id_work_order_id",
         ),
         Index("ix_service_records_equipment_id", "equipment_id"),
         Index("ix_service_records_work_order_id", "work_order_id"),

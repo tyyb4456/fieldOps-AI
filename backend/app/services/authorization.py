@@ -6,6 +6,7 @@ from sqlalchemy import Select, false, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.complaint import Complaint
+from app.models.completion_report import CompletionReport
 from app.models.customer import Customer
 from app.models.enums import AssignmentStatus, UserRole
 from app.models.equipment import Equipment
@@ -165,6 +166,50 @@ def scope_service_records_for_user(
     return statement.where(false())
 
 
+def scope_completion_reports_for_user(
+    user: User,
+) -> Select[tuple[CompletionReport]]:
+    statement = select(CompletionReport)
+
+    if is_admin(user):
+        return statement
+
+    if is_customer(user):
+        return statement.where(
+            CompletionReport.work_order_id.in_(
+                select(WorkOrder.id)
+                .join(
+                    Complaint,
+                    WorkOrder.complaint_id == Complaint.id,
+                )
+                .join(
+                    Customer,
+                    Complaint.customer_id == Customer.id,
+                )
+                .where(Customer.user_id == user.id)
+            )
+        )
+
+    if is_technician(user):
+        return statement.where(
+            CompletionReport.work_order_id.in_(
+                select(TechnicianAssignment.work_order_id)
+                .join(
+                    Technician,
+                    TechnicianAssignment.technician_id == Technician.id,
+                )
+                .where(
+                    Technician.user_id == user.id,
+                    TechnicianAssignment.assignment_status.in_(
+                        TECHNICIAN_VISIBLE_ASSIGNMENT_STATUSES
+                    ),
+                )
+            )
+        )
+
+    return statement.where(false())
+
+
 async def get_work_order_for_user(
     session: AsyncSession,
     user: User,
@@ -229,6 +274,28 @@ async def get_service_record_for_user(
     if service_record is None:
         raise AccessDeniedError("Service record not found")
     return service_record
+
+
+async def get_completion_report_for_user(
+    session: AsyncSession,
+    user: User,
+    completion_report_id: uuid.UUID,
+    *,
+    for_update: bool = False,
+) -> CompletionReport:
+    statement = scope_completion_reports_for_user(user).where(
+        CompletionReport.id == completion_report_id
+    )
+    if for_update:
+        statement = statement.with_for_update().execution_options(
+            populate_existing=True
+        )
+
+    result = await session.execute(statement)
+    completion_report = result.scalar_one_or_none()
+    if completion_report is None:
+        raise AccessDeniedError("Completion report not found")
+    return completion_report
 
 
 async def get_customer_for_user(

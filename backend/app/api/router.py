@@ -7,12 +7,15 @@ from app.api.routes import (
     assignments,
     auth,
     complaints,
+    completion_reports,
     customers,
+    documents,
     equipment,
     health,
     service_records,
     users,
     work_orders,
+    workflow_runs,
 )
 
 api_router = APIRouter()
@@ -26,3 +29,6 @@ api_router.include_router(admin.router)
 api_router.include_router(work_orders.router)
 api_router.include_router(assignments.router)
 api_router.include_router(service_records.router)
+api_router.include_router(completion_reports.router)
+api_router.include_router(documents.router)
+api_router.include_router(workflow_runs.router)

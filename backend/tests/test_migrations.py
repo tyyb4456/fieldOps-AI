@@ -131,6 +131,50 @@ def test_expected_constraints_and_indexes_exist(
             ]
         ) == {"work_order_id", "equipment_id"}
 
+        service_record_uniques = {
+            unique["name"]
+            for unique in inspector.get_unique_constraints("service_records")
+        }
+        assert "uq_service_records_id_work_order_id" in (
+            service_record_uniques
+        )
+
+        report_columns = {
+            column["name"]: column
+            for column in inspector.get_columns("completion_reports")
+        }
+        assert report_columns["service_record_id"]["nullable"] is True
+
+        report_uniques = {
+            unique["name"]
+            for unique in inspector.get_unique_constraints(
+                "completion_reports"
+            )
+        }
+        assert "uq_completion_reports_work_order_id" in report_uniques
+
+        report_fks = {
+            fk["name"]: fk
+            for fk in inspector.get_foreign_keys("completion_reports")
+        }
+        association_fk = report_fks[
+            "fk_completion_reports_service_record_work_order"
+        ]
+        assert set(association_fk["constrained_columns"]) == {
+            "service_record_id",
+            "work_order_id",
+        }
+        assert set(association_fk["referred_columns"]) == {
+            "id",
+            "work_order_id",
+        }
+
+        report_indexes = {
+            index["name"]
+            for index in inspector.get_indexes("completion_reports")
+        }
+        assert "ix_completion_reports_work_order_id" not in report_indexes
+
         work_order_uniques = {
             unique["name"]
             for unique in inspector.get_unique_constraints("work_orders")
@@ -387,7 +431,7 @@ def test_clerk_identity_migration_downgrade_requires_password_hashes(
                 )
             ).scalar_one()
 
-    assert version == "0008_active_assignment_unique"
+    assert version == "0009_completion_report_link"
     assert clerk_user_id == "user_clerk_test"
 
 
@@ -712,7 +756,7 @@ def test_complaint_history_downgrade_refuses_and_requires_archival(
                 )
             ).all()
 
-    assert version == "0008_active_assignment_unique"
+    assert version == "0009_completion_report_link"
     assert count == 1
     assert archived[0].complaint_id == complaint_id
     assert archived[0].sequence_number == 1
@@ -729,3 +773,155 @@ def test_complaint_history_downgrade_refuses_and_requires_archival(
     )
 
     assert "complaint_history" not in _table_names(empty_migration_database)
+
+def test_completion_report_link_migration_adds_and_removes_association(
+    empty_migration_database: MigrationDatabase,
+) -> None:
+    command.upgrade(empty_migration_database.config, "head")
+
+    with _sync_engine(empty_migration_database) as engine:
+        inspector = inspect(engine)
+        columns = {
+            column["name"]
+            for column in inspector.get_columns("completion_reports")
+        }
+        report_uniques = {
+            unique["name"]
+            for unique in inspector.get_unique_constraints(
+                "completion_reports"
+            )
+        }
+        service_record_uniques = {
+            unique["name"]
+            for unique in inspector.get_unique_constraints("service_records")
+        }
+        report_indexes = {
+            index["name"]
+            for index in inspector.get_indexes("completion_reports")
+        }
+
+    assert "service_record_id" in columns
+    assert "uq_completion_reports_work_order_id" in report_uniques
+    assert "uq_service_records_id_work_order_id" in service_record_uniques
+    assert "ix_completion_reports_work_order_id" not in report_indexes
+
+    command.downgrade(
+        empty_migration_database.config,
+        "0008_active_assignment_unique",
+    )
+
+    with _sync_engine(empty_migration_database) as engine:
+        inspector = inspect(engine)
+        columns = {
+            column["name"]
+            for column in inspector.get_columns("completion_reports")
+        }
+        report_uniques = {
+            unique["name"]
+            for unique in inspector.get_unique_constraints(
+                "completion_reports"
+            )
+        }
+        service_record_uniques = {
+            unique["name"]
+            for unique in inspector.get_unique_constraints("service_records")
+        }
+        report_indexes = {
+            index["name"]
+            for index in inspector.get_indexes("completion_reports")
+        }
+
+    assert "service_record_id" not in columns
+    assert "uq_completion_reports_work_order_id" not in report_uniques
+    assert "uq_service_records_id_work_order_id" not in service_record_uniques
+    assert "ix_completion_reports_work_order_id" in report_indexes
+
+
+def test_completion_report_link_migration_aborts_on_duplicate_reports(
+    empty_migration_database: MigrationDatabase,
+) -> None:
+    command.upgrade(
+        empty_migration_database.config,
+        "0008_active_assignment_unique",
+    )
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            user_id = connection.execute(
+                text(
+                    "INSERT INTO users (full_name, email, role) "
+                    "VALUES ('Report Owner', :email, 'customer') "
+                    "RETURNING id"
+                ),
+                {"email": f"report_{uuid.uuid4().hex}@example.com"},
+            ).scalar_one()
+            customer_id = connection.execute(
+                text(
+                    "INSERT INTO customers (user_id) "
+                    "VALUES (:user_id) RETURNING id"
+                ),
+                {"user_id": user_id},
+            ).scalar_one()
+            equipment_id = connection.execute(
+                text(
+                    "INSERT INTO equipment "
+                    "(customer_id, manufacturer, model, serial_number, "
+                    "equipment_type) VALUES (:customer_id, 'Acme', "
+                    "'INV-5000', :serial, 'solar_inverter') RETURNING id"
+                ),
+                {
+                    "customer_id": customer_id,
+                    "serial": uuid.uuid4().hex[:12],
+                },
+            ).scalar_one()
+            complaint_id = connection.execute(
+                text(
+                    "INSERT INTO complaints "
+                    "(customer_id, equipment_id, description, channel, "
+                    "status) VALUES (:customer_id, :equipment_id, "
+                    "'Legacy complaint', 'web', 'received') RETURNING id"
+                ),
+                {
+                    "customer_id": customer_id,
+                    "equipment_id": equipment_id,
+                },
+            ).scalar_one()
+            work_order_id = connection.execute(
+                text(
+                    "INSERT INTO work_orders "
+                    "(complaint_id, equipment_id, title, description) "
+                    "VALUES (:complaint_id, :equipment_id, 'Inspect', "
+                    "'Legacy work order') RETURNING id"
+                ),
+                {
+                    "complaint_id": complaint_id,
+                    "equipment_id": equipment_id,
+                },
+            ).scalar_one()
+            for summary in ("First report", "Second report"):
+                connection.execute(
+                    text(
+                        "INSERT INTO completion_reports "
+                        "(work_order_id, summary) "
+                        "VALUES (:work_order_id, :summary)"
+                    ),
+                    {
+                        "work_order_id": work_order_id,
+                        "summary": summary,
+                    },
+                )
+
+    with pytest.raises(RuntimeError, match="one completion report"):
+        command.upgrade(empty_migration_database.config, "head")
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            version = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            report_count = connection.execute(
+                text("SELECT count(*) FROM completion_reports")
+            ).scalar_one()
+
+    assert version == "0008_active_assignment_unique"
+    assert report_count == 2
