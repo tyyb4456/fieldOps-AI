@@ -172,6 +172,33 @@ async def _append_history(
     return entry
 
 
+async def append_complaint_history(
+    session: AsyncSession,
+    *,
+    complaint_id: uuid.UUID,
+    event_type: str,
+    from_status: ComplaintStatus | None,
+    to_status: ComplaintStatus | None,
+    changed_fields: dict[str, Any],
+    actor_id: uuid.UUID | None,
+) -> ComplaintHistory:
+    """Append one history event while holding the complaint row lock.
+
+    Exposed for other business operations (for example complaint conversion)
+    that must record an audit event in the same transaction as their own
+    mutation.
+    """
+    return await _append_history(
+        session,
+        complaint_id=complaint_id,
+        event_type=event_type,
+        from_status=from_status,
+        to_status=to_status,
+        changed_fields=changed_fields,
+        actor_id=actor_id,
+    )
+
+
 async def create_complaint(
     session: AsyncSession,
     *,

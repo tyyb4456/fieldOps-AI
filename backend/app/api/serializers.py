@@ -4,14 +4,24 @@ from app.models.complaint import Complaint
 from app.models.complaint_history import ComplaintHistory
 from app.models.customer import Customer
 from app.models.equipment import Equipment
+from app.models.service_record import ServiceRecord
+from app.models.technician import Technician
+from app.models.technician_assignment import TechnicianAssignment
 from app.models.user import User
+from app.models.work_order import WorkOrder
+from app.schemas.assignment import (
+    AssignmentResponse,
+    TechnicianSummaryResponse,
+)
 from app.schemas.complaint import (
     ComplaintHistoryResponse,
     ComplaintResponse,
 )
 from app.schemas.customer import CustomerProfileResponse
 from app.schemas.equipment import EquipmentResponse
+from app.schemas.service_record import ServiceRecordResponse
 from app.schemas.user import UserMeResponse
+from app.schemas.work_order import WorkOrderResponse
 
 
 def user_me_response(user: User) -> UserMeResponse:
@@ -90,4 +100,62 @@ def complaint_history_response(
         changed_fields=history.changed_fields,
         actor_id=history.actor_id,
         created_at=history.created_at,
+    )
+
+
+def work_order_response(work_order: WorkOrder) -> WorkOrderResponse:
+    return WorkOrderResponse(
+        id=work_order.id,
+        complaint_id=work_order.complaint_id,
+        equipment_id=work_order.equipment_id,
+        title=work_order.title,
+        description=work_order.description,
+        diagnostic_checklist=work_order.diagnostic_checklist,
+        priority=work_order.priority,
+        status=work_order.status,
+        created_at=work_order.created_at,
+        updated_at=work_order.updated_at,
+    )
+
+
+def assignment_response(
+    assignment: TechnicianAssignment,
+) -> AssignmentResponse:
+    return AssignmentResponse(
+        id=assignment.id,
+        work_order_id=assignment.work_order_id,
+        technician_id=assignment.technician_id,
+        assignment_status=assignment.assignment_status,
+        assigned_at=assignment.assigned_at,
+        accepted_at=assignment.accepted_at,
+        rejected_at=assignment.rejected_at,
+    )
+
+
+def technician_summary_response(
+    technician: Technician,
+) -> TechnicianSummaryResponse:
+    return TechnicianSummaryResponse(
+        id=technician.id,
+        user_id=technician.user_id,
+        full_name=technician.user.full_name,
+        email=technician.user.email,
+        skills=technician.skills,
+        service_area=technician.service_area,
+        is_available=technician.is_available,
+    )
+
+
+def service_record_response(
+    service_record: ServiceRecord,
+) -> ServiceRecordResponse:
+    return ServiceRecordResponse(
+        id=service_record.id,
+        equipment_id=service_record.equipment_id,
+        work_order_id=service_record.work_order_id,
+        technician_id=service_record.technician_id,
+        findings=service_record.findings,
+        work_performed=service_record.work_performed,
+        parts_used=service_record.parts_used,
+        recorded_at=service_record.recorded_at,
     )

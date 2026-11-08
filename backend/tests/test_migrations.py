@@ -387,7 +387,7 @@ def test_clerk_identity_migration_downgrade_requires_password_hashes(
                 )
             ).scalar_one()
 
-    assert version == "0007_complaint_history_sequence"
+    assert version == "0008_active_assignment_unique"
     assert clerk_user_id == "user_clerk_test"
 
 
@@ -712,7 +712,7 @@ def test_complaint_history_downgrade_refuses_and_requires_archival(
                 )
             ).all()
 
-    assert version == "0007_complaint_history_sequence"
+    assert version == "0008_active_assignment_unique"
     assert count == 1
     assert archived[0].complaint_id == complaint_id
     assert archived[0].sequence_number == 1

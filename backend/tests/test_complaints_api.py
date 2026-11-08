@@ -4,6 +4,7 @@ import asyncio
 import uuid
 
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.complaint import Complaint
@@ -443,25 +444,127 @@ async def _complaint_history(
     return list(result.scalars().all())
 
 
-async def _wait_for_blocked_lock(
+async def _assert_complaint_row_locked(
+    session_factory: async_sessionmaker[AsyncSession],
+    complaint_id: uuid.UUID,
+) -> None:
+    """Prove the editor transaction holds the complaint row lock.
+
+    A separate connection tries ``FOR UPDATE NOWAIT`` on the same row. The
+    expected ``55P03`` (lock_not_available) error confirms the row is locked
+    by another transaction; anything else means the scenario was not set up.
+    """
+    async with session_factory() as probe:
+        try:
+            await probe.execute(
+                text(
+                    "SELECT id FROM complaints WHERE id = :complaint_id "
+                    "FOR UPDATE NOWAIT"
+                ),
+                {"complaint_id": complaint_id},
+            )
+        except DBAPIError as exc:
+            sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(
+                exc.orig,
+                "pgcode",
+                None,
+            )
+            if sqlstate == "55P03":
+                return
+            raise
+        finally:
+            await probe.rollback()
+        raise AssertionError(
+            "the PATCH transaction does not hold the complaint row lock"
+        )
+
+
+async def _wait_for_blocked_complaint_lock(
     session: AsyncSession,
+    task: asyncio.Task[object],
     *,
+    editor_pid: int,
     timeout: float = 10.0,
 ) -> None:
-    """Wait until another backend in this database is blocked on a lock."""
+    """Wait until cancellation is blocked on the complaint row lock.
+
+    The waiter is identified by its PostgreSQL backend, the editor backend
+    that blocks it, and the complaint ``FOR UPDATE`` statement (or the tuple
+    lock PostgreSQL grants while it waits). This avoids matching unrelated
+    lock waits in the same database. A task that finishes or fails before it
+    blocks is reported immediately instead of silently timing out.
+    """
     deadline = asyncio.get_running_loop().time() + timeout
+    snapshot: list[tuple[object, ...]] = []
     while asyncio.get_running_loop().time() < deadline:
-        waiting = await session.scalar(
-            text(
-                "SELECT count(*) FROM pg_stat_activity "
-                "WHERE datname = current_database() "
-                "AND wait_event_type = 'Lock'"
+        if task.done():
+            if task.cancelled():
+                raise AssertionError(
+                    "cancellation task was cancelled before blocking on the "
+                    "complaint row"
+                )
+            error = task.exception()
+            if error is not None:
+                raise AssertionError(
+                    "cancellation task failed before blocking on the "
+                    f"complaint row: {error!r}"
+                ) from error
+            raise AssertionError(
+                "cancellation task finished before blocking on the complaint "
+                "row"
             )
+
+        result = await session.execute(
+            text(
+                "SELECT DISTINCT a.pid, a.state, a.wait_event_type, "
+                "a.wait_event, pg_blocking_pids(a.pid) AS blockers, a.query "
+                "FROM pg_stat_activity AS a "
+                "WHERE a.datname = current_database() "
+                "AND a.pid <> pg_backend_pid() "
+                "AND a.wait_event_type = 'Lock' "
+                "AND :editor_pid = ANY(pg_blocking_pids(a.pid)) "
+                "AND ("
+                "  (a.query ILIKE '%from complaints%' "
+                "   AND a.query ILIKE '%for update%') "
+                "  OR EXISTS ("
+                "    SELECT 1 FROM pg_locks AS l "
+                "    WHERE l.pid = a.pid AND l.granted "
+                "    AND l.locktype = 'tuple' "
+                "    AND l.relation = 'complaints'::regclass"
+                "  )"
+                ")"
+            ),
+            {"editor_pid": editor_pid},
         )
-        if waiting:
+        rows = result.all()
+        snapshot = [tuple(row) for row in rows]
+        if rows:
             return
         await asyncio.sleep(0.01)
-    raise AssertionError("timed out waiting for a blocked row lock")
+
+    if task.cancelled():
+        task_state = "cancelled"
+    elif task.done():
+        task_state = f"finished (exception={task.exception()!r})"
+    else:
+        task_state = "still pending"
+    activity = (
+        await session.execute(
+            text(
+                "SELECT pid, state, wait_event_type, wait_event, "
+                "pg_blocking_pids(pid) AS blockers, query "
+                "FROM pg_stat_activity "
+                "WHERE datname = current_database() "
+                "AND pid <> pg_backend_pid()"
+            )
+        )
+    ).all()
+    raise AssertionError(
+        "timed out waiting for cancellation to block on the complaint row; "
+        f"task={task_state}, editor_pid={editor_pid}, "
+        f"matching_wait={snapshot!r}, "
+        f"activity={[tuple(row) for row in activity]!r}"
+    )
 
 
 async def test_complaint_creation_records_initial_history(
@@ -650,6 +753,9 @@ async def test_patch_first_then_cancel_preserves_history_order(
     )
 
     async with session_factory() as editor:
+        editor_pid = int(
+            await editor.scalar(text("SELECT pg_backend_pid()"))
+        )
         locked = await complaint_service.get_complaint(
             editor,
             complaint_id,
@@ -661,14 +767,24 @@ async def test_patch_first_then_cancel_preserves_history_order(
             ComplaintUpdate(description="Edited before cancellation."),
             actor_id=user.id,
         )
+        await _assert_complaint_row_locked(session_factory, complaint_id)
 
-        cancel_task = asyncio.create_task(
-            api_client.post(
+        cancel_started = asyncio.Event()
+
+        async def request_cancellation():
+            cancel_started.set()
+            return await api_client.post(
                 f"/api/v1/customers/me/complaints/{complaint_id}/cancel",
                 headers=bearer(token),
             )
+
+        cancel_task = asyncio.create_task(request_cancellation())
+        await asyncio.wait_for(cancel_started.wait(), timeout=5)
+        await _wait_for_blocked_complaint_lock(
+            migrated_db_session,
+            cancel_task,
+            editor_pid=editor_pid,
         )
-        await _wait_for_blocked_lock(migrated_db_session)
         assert not cancel_task.done()
 
         await editor.commit()

@@ -12,6 +12,7 @@ from app.core.exceptions import AppError
 from app.db.session import get_db_session
 from app.models.customer import Customer
 from app.models.enums import UserRole
+from app.models.technician import Technician
 from app.models.user import User
 from app.services.accounts import (
     AccountConflictError,
@@ -163,6 +164,7 @@ def require_roles(*roles: UserRole) -> Callable[..., object]:
 require_admin_user = require_roles(UserRole.ADMIN)
 require_customer_user = require_roles(UserRole.CUSTOMER)
 require_technician_user = require_roles(UserRole.TECHNICIAN)
+require_operations_user = require_roles(UserRole.ADMIN, UserRole.TECHNICIAN)
 
 
 async def get_current_customer(
@@ -182,3 +184,17 @@ async def get_current_customer(
             code="account_configuration_error",
         )
     return customer
+
+
+async def get_current_technician(
+    current_user: User = Depends(require_technician_user),
+) -> Technician:
+    """Resolve the authenticated technician's operational profile."""
+    technician = current_user.technician
+    if technician is None:
+        raise AppError(
+            "Account configuration is invalid. Contact support.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="account_configuration_error",
+        )
+    return technician

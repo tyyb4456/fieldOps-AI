@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Index, func
+from sqlalchemy import DateTime, ForeignKey, Index, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, UUIDPrimaryKeyMixin
@@ -25,6 +25,14 @@ class TechnicianAssignment(UUIDPrimaryKeyMixin, Base):
         Index(
             "ix_technician_assignments_technician_id",
             "technician_id",
+        ),
+        Index(
+            "uq_technician_assignments_active_work_order",
+            "work_order_id",
+            unique=True,
+            postgresql_where=text(
+                "assignment_status IN ('offered', 'accepted')"
+            ),
         ),
     )
 

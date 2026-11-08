@@ -333,6 +333,8 @@ Only storing `technician_id` directly in the work-order table is not enough; a s
 
 If `technician_id` is simply overwritten, the assignment history is lost. With a separate table, both assignments are preserved, which gives the admin a complete operational history.
 
+Only one assignment per work order may be `offered` or `accepted` at a time. A work order in `awaiting_assignment` has no active assignment: rejection, administrator withdrawal, and an escalation return to the pool all withdraw active rows in the same transaction. Escalation itself pauses the job and preserves the assignment for context, but technicians cannot advance an escalated job. The service locks the work-order row before the assignment rows, and the partial unique index `uq_technician_assignments_active_work_order` is the database backstop. See `database_integrity_conventions.md` section 7.
+
 ### Table 10: `service_records`
 
 Stores the actual maintenance history.

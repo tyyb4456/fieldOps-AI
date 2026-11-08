@@ -436,21 +436,49 @@ Authorization and integrity rules enforced by these routes:
 - History is append-only and admin-only via `GET /api/v1/admin/complaints/{id}/history`. Customers cannot read or write history, and the endpoint returns `404` for an unknown complaint. The pre-`0006` historical coverage gap and the destructive downgrade/archival policy are documented in `database_integrity_conventions.md`.
 - List endpoints enforce bounded pagination and return only records owned by the caller. Admin endpoints require the admin role and do not replace customer-level ownership checks.
 
-### Work-order APIs
+### Work-order, assignment and service-record APIs
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| GET | `/api/v1/work-orders` | List accessible work orders |
-| GET | `/api/v1/work-orders/{id}` | View a work order |
-| POST | `/api/v1/work-orders/{id}/accept` | Accept a job |
-| POST | `/api/v1/work-orders/{id}/status` | Update job status |
-| POST | `/api/v1/work-orders/{id}/completion` | Submit completion evidence |
+| GET | `/api/v1/work-orders` | List work orders visible to the caller |
+| GET | `/api/v1/work-orders/{id}` | View a work order visible to the caller |
+| POST | `/api/v1/admin/complaints/{id}/work-orders` | Convert an eligible complaint into a work order |
+| PATCH | `/api/v1/admin/work-orders/{id}` | Edit work-order fields before operational work |
+| POST | `/api/v1/work-orders/{id}/status` | Apply a role-permitted lifecycle transition |
+| POST | `/api/v1/work-orders/{id}/accept` | Technician accepts the offered work order |
+| POST | `/api/v1/work-orders/{id}/reject` | Technician rejects the offered work order |
+| GET | `/api/v1/assignments` | List assignments visible to the caller |
+| GET | `/api/v1/assignments/{id}` | View an assignment visible to the caller |
+| POST | `/api/v1/admin/work-orders/{id}/assignments` | Offer a work order to an eligible technician |
+| POST | `/api/v1/admin/work-orders/{id}/assignments/reassign` | Withdraw active offers and assign another technician |
+| POST | `/api/v1/assignments/{id}/accept` | Technician accepts an offered assignment |
+| POST | `/api/v1/assignments/{id}/reject` | Technician rejects an offered assignment |
+| POST | `/api/v1/admin/assignments/{id}/withdraw` | Admin withdraws an active assignment |
+| GET | `/api/v1/technicians` | Admin lists eligible technician profiles |
+| GET | `/api/v1/work-orders/{id}/service-records` | List service records for an accessible work order |
+| POST | `/api/v1/work-orders/{id}/service-records` | Technician records service activity |
+| GET | `/api/v1/service-records` | List service records visible to the caller |
+| GET | `/api/v1/service-records/{id}` | View a service record visible to the caller |
+| PATCH | `/api/v1/service-records/{id}` | Technician updates their own active service record |
+
+Work-order and assignment rules enforced by these routes:
+
+- Conversion requires a complaint in `ready_for_work_order`, an identified equipment record owned by the complaint customer, and no existing work order for that complaint. The complaint row lock serializes concurrent conversions; `uq_work_orders_complaint_id` is the database backstop. Conversion moves the complaint to `converted` and appends a complaint-history event in the same transaction.
+- Work orders are visible to the complaint's customer, admins, and technicians holding an `offered` or `accepted` assignment. Other callers receive `404 not_found`.
+- Administrators drive validation, escalation, cancellation and final completion. Technicians may start accepted jobs, enter `awaiting_parts`, submit for verification, resume from `awaiting_parts`, or escalate. `pending_verification` requires at least one service record; `completed` requires a service record with non-empty `work_performed`.
+- A work order may accumulate assignment attempts, but only one assignment may be `offered` or `accepted`. Creation/reassignment/acceptance/rejection/withdrawal all lock the work-order row first. Migration `0008_active_assignment_unique` adds a partial unique index on active `work_order_id` as the database backstop.
+- **Lifecycle invariant:** a work order in `awaiting_assignment` never has an active (`offered` or `accepted`) assignment. Every transition into `awaiting_assignment` — technician rejection, administrator withdrawal, or an escalation return — withdraws any active assignment in the same transaction as the work-order status change. Re-offering afterwards inserts a new history row; it never rewrites the withdrawn row.
+- **Escalation policy:** `escalated` is an administrative pause. Moving an `assigned`, `accepted` or `in_progress` work order to `escalated` keeps the current assignment row intact for context, but technicians cannot advance an escalated work order. If an administrator later returns it to `awaiting_assignment`, the active assignment is withdrawn atomically. Cancelling an escalated work order likewise withdraws it.
+- **Lock ordering:** every assignment mutation acquires the `work_orders` row first, then the active `technician_assignments` rows. This order is shared by creation, reassignment, acceptance, rejection, withdrawal, cancellation and escalation-return. Competing operations serialize on the work-order row and cannot interleave contradictory states.
+- **Stale-identity protection:** locking reads use SQLAlchemy `populate_existing` so an ORM instance already present in the session is refreshed from the committed row before any lifecycle decision. This prevents an acceptance or rejection from acting on an assignment that a concurrent reassignment has already withdrawn.
+- Reassignment withdraws active offers before creating the replacement. Cancelling a work order withdraws any active assignment. Withdrawing or rejecting the last offer returns the work order to `awaiting_assignment`.
+- Service records may be created only by the assigned technician holding an `accepted` assignment while the work order is `accepted`, `in_progress` or `awaiting_parts`. The server owns `equipment_id`, `work_order_id`, `technician_id` and `recorded_at`. Records are immutable after completion. Updates lock the work order and then refresh the service-record row with `populate_existing`, so validation uses current committed values rather than a stale identity-map copy.
+- Assignment eligibility requires an active technician account with the technician role and an available technician profile. Ineligible or duplicate active assignments return `409`. An expected active-assignment uniqueness violation is translated to `409 assignment_conflict` with a generic message and no SQL details; unrelated integrity errors remain server errors.
 
 ### Other APIs
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| GET | `/api/v1/technicians` | List eligible technicians |
 | GET | `/api/v1/equipment/{id}` | View equipment information |
 | POST | `/api/v1/webhooks/whatsapp` | Receive WhatsApp events |
 

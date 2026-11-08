@@ -77,3 +77,28 @@ Do not claim the downgrade is reversible without qualification. It is schema-rev
 - `equipment` enforces a global uniqueness constraint on `(manufacturer, serial_number)`. The comparison is case-sensitive and applies across all customers.
 - `serial_number` is nullable. PostgreSQL unique constraints allow multiple rows with `NULL` serial numbers, so equipment may be recorded without a serial number.
 - Whether serial comparison should be case-insensitive, manufacturer-scoped or normalized is an unresolved product decision. The current policy follows the database constraint and must not be changed without a migration and an explicit decision.
+
+## 7. One active assignment per work order
+
+- Assignment history is intentionally kept, so a work order may have many rows in `technician_assignments` across its lifetime.
+- At most one row may have `assignment_status` equal to `offered` or `accepted`. Migration `0008_active_assignment_unique` enforces this with the partial unique index `uq_technician_assignments_active_work_order` on `work_order_id WHERE assignment_status IN ('offered', 'accepted')`.
+- Service-layer assignment creation, reassignment, acceptance, rejection and withdrawal lock the work-order row (`SELECT ... FOR UPDATE`) before reading or changing active assignments. The index is the database backstop for any future write path that bypasses the service.
+- `0008` refuses to upgrade while an existing work order has multiple active assignments. Withdraw or reject the extra rows before rerunning the migration.
+- Reassignment marks existing active assignments `withdrawn` and inserts the new `offered` assignment in one transaction. Cancelling a work order also withdraws active assignments. The partial index permits any number of non-active historical rows.
+
+### Lifecycle invariant
+
+- A work order in `awaiting_assignment` must have no active (`offered` or `accepted`) assignment. The assignment service enforces this on every path that returns a job to the pool: rejection, administrator withdrawal, and a transition from `escalated` back to `awaiting_assignment` all withdraw active rows in the same transaction that changes the work-order status.
+- Escalation is an administrative pause. Moving to `escalated` from `assigned`, `accepted` or `in_progress` preserves the current assignment row for context, but technicians cannot advance an escalated job. Returning to `awaiting_assignment` or cancelling then withdraws it. This policy is intentional: escalation pauses the job without erasing who was working on it.
+- If the withdrawal step fails, the whole transition rolls back; the work order remains `escalated` and the assignment remains active. Assignment withdrawal is never committed in a separate transaction from the status change.
+
+### Lock ordering and stale ORM identity
+
+- Assignment operations acquire locks in one order: the `work_orders` row first, then the relevant `technician_assignments` rows. This applies to creation, reassignment, acceptance, rejection, withdrawal, cancellation and escalation-return. Competing transactions therefore serialize on the work-order row before touching assignments.
+- Locking reads use SQLAlchemy `populate_existing=True`. Without it, a `SELECT ... FOR UPDATE` on a row already present in the session's identity map can return the cached instance without reloading its attributes, so the service could act on an assignment status that a concurrent transaction has already changed. With it, the instance is refreshed from the locked, committed row before lifecycle checks run.
+- The same pattern is used for work-order locking and for service-record updates. A service-record update locks the work order and then refreshes the record from the database before validating the resulting `findings`/`work_performed` combination.
+
+### Integrity-conflict translation
+
+- The partial unique index remains the final safeguard. Expected violations of `uq_technician_assignments_active_work_order` are translated at the route boundary to `409 assignment_conflict` with a generic message; raw SQL text and constraint details are not exposed.
+- Other integrity errors are re-raised and remain server errors. They are not misreported as assignment conflicts.
