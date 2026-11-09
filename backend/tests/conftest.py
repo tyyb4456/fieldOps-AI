@@ -36,10 +36,12 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool
 
+from app.api.dependencies.storage import get_document_storage
 from app.core.config import settings
 from app.db.session import get_db_session
 from app.main import app
 from app.services.rate_limit import reset_rate_limiters
+from app.services.storage import LocalFileStorage
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
@@ -53,10 +55,14 @@ def _generate_rsa_key_pair() -> tuple[str, str]:
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
     ).decode("utf-8")
-    public_pem = key.public_key().public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode("utf-8")
+    public_pem = (
+        key.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode("utf-8")
+    )
     return private_pem, public_pem
 
 
@@ -126,9 +132,7 @@ def _temporary_database() -> Iterator[MigrationDatabase]:
     with admin_engine.connect() as connection:
         connection.execute(text(f'CREATE DATABASE "{database_name}"'))
 
-    config = _alembic_config(
-        target_url.render_as_string(hide_password=False)
-    )
+    config = _alembic_config(target_url.render_as_string(hide_password=False))
 
     try:
         yield MigrationDatabase(
@@ -147,9 +151,7 @@ def _temporary_database() -> Iterator[MigrationDatabase]:
                 ),
                 {"database_name": database_name},
             )
-            connection.execute(
-                text(f'DROP DATABASE IF EXISTS "{database_name}"')
-            )
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{database_name}"'))
         admin_engine.dispose()
 
 
@@ -295,6 +297,25 @@ async def api_client(
     finally:
         app.dependency_overrides.pop(get_db_session, None)
         await engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def document_storage(tmp_path: Path) -> Iterator[LocalFileStorage]:
+    """Guarantee every test uses isolated temporary document storage.
+
+    This fixture is autouse so a test that forgets to request storage cannot
+    write into the developer's real ``backend/var/document_storage`` directory.
+    """
+
+    storage = LocalFileStorage(
+        tmp_path / "document_storage",
+        max_bytes=settings.max_upload_size_bytes,
+    )
+    app.dependency_overrides[get_document_storage] = lambda: storage
+    try:
+        yield storage
+    finally:
+        app.dependency_overrides.pop(get_document_storage, None)
 
 
 @pytest.fixture(autouse=True)

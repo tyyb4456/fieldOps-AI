@@ -11,10 +11,17 @@ from sqlalchemy.exc import ArgumentError
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 
-DEFAULT_DATABASE_URL = (
-    "postgresql+asyncpg://fieldops:fieldops@localhost:5432/fieldops"
-)
+DEFAULT_DATABASE_URL = "postgresql+asyncpg://fieldops:fieldops@localhost:5432/fieldops"
 DEFAULT_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
+DEFAULT_STORAGE_ROOT = BACKEND_DIR / "var" / "document_storage"
+DEFAULT_MAX_UPLOAD_SIZE_BYTES = 25 * 1024 * 1024
+DEFAULT_MAX_PDF_PAGES = 500
+DEFAULT_DOCUMENT_CHUNK_SIZE = 1000
+DEFAULT_DOCUMENT_CHUNK_OVERLAP = 200
+DEFAULT_DOCUMENT_INGESTION_VERSION = "1"
+DEFAULT_REQUEST_BODY_OVERHEAD_BYTES = 64 * 1024
+DEFAULT_INGESTION_STALE_AFTER_SECONDS = 30 * 60
+SUPPORTED_STORAGE_BACKENDS = frozenset({"local"})
 
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 SAFE_TLS_MODES = frozenset({"require", "verify-ca", "verify-full"})
@@ -74,6 +81,32 @@ class Settings(BaseSettings):
     clerk_jwt_key: str | None = None
     clerk_authorized_parties: str = DEFAULT_CORS_ORIGINS
 
+    storage_backend: str = "local"
+    storage_root: Path = DEFAULT_STORAGE_ROOT
+    max_upload_size_bytes: int = Field(
+        default=DEFAULT_MAX_UPLOAD_SIZE_BYTES,
+        ge=1,
+    )
+    request_body_overhead_bytes: int = Field(
+        default=DEFAULT_REQUEST_BODY_OVERHEAD_BYTES,
+        ge=0,
+    )
+    ingestion_stale_after_seconds: int = Field(
+        default=DEFAULT_INGESTION_STALE_AFTER_SECONDS,
+        ge=1,
+    )
+    allowed_document_content_types: str = "application/pdf"
+    max_pdf_pages: int = Field(default=DEFAULT_MAX_PDF_PAGES, ge=1)
+    document_chunk_size: int = Field(
+        default=DEFAULT_DOCUMENT_CHUNK_SIZE,
+        ge=1,
+    )
+    document_chunk_overlap: int = Field(
+        default=DEFAULT_DOCUMENT_CHUNK_OVERLAP,
+        ge=0,
+    )
+    document_ingestion_version: str = DEFAULT_DOCUMENT_INGESTION_VERSION
+
     auth_bootstrap_rate_limit_per_ip: int = Field(default=30, ge=1)
     auth_bootstrap_rate_limit_per_subject: int = Field(default=10, ge=1)
     auth_bootstrap_rate_limit_window_seconds: int = Field(
@@ -105,14 +138,11 @@ class Settings(BaseSettings):
         try:
             url = make_url(value)
         except (ArgumentError, ValueError) as exc:
-            raise ValueError(
-                "DATABASE_URL must be a valid PostgreSQL URL"
-            ) from exc
+            raise ValueError("DATABASE_URL must be a valid PostgreSQL URL") from exc
 
         if url.drivername != "postgresql+asyncpg":
             raise ValueError(
-                "DATABASE_URL must use the asyncpg driver "
-                "(postgresql+asyncpg://...)"
+                "DATABASE_URL must use the asyncpg driver (postgresql+asyncpg://...)"
             )
 
         if not url.host:
@@ -125,13 +155,9 @@ class Settings(BaseSettings):
             try:
                 port = int(url.port)
             except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    "DATABASE_URL must include a valid port"
-                ) from exc
+                raise ValueError("DATABASE_URL must include a valid port") from exc
             if not 1 <= port <= 65535:
-                raise ValueError(
-                    "DATABASE_URL port must be between 1 and 65535"
-                )
+                raise ValueError("DATABASE_URL port must be between 1 and 65535")
 
         return value
 
@@ -148,9 +174,7 @@ class Settings(BaseSettings):
     def validate_log_level(cls, value: str) -> str:
         level = value.strip().upper()
         if level not in VALID_LOG_LEVELS:
-            raise ValueError(
-                f"LOG_LEVEL must be one of {sorted(VALID_LOG_LEVELS)}"
-            )
+            raise ValueError(f"LOG_LEVEL must be one of {sorted(VALID_LOG_LEVELS)}")
         return level
 
     @field_validator("clerk_secret_key", "clerk_jwt_key", mode="before")
@@ -172,9 +196,7 @@ class Settings(BaseSettings):
                 "CLERK_AUTHORIZED_PARTIES must contain at least one origin"
             )
         if "*" in parties:
-            raise ValueError(
-                "CLERK_AUTHORIZED_PARTIES must not use a wildcard origin"
-            )
+            raise ValueError("CLERK_AUTHORIZED_PARTIES must not use a wildcard origin")
         return ",".join(parties)
 
     @field_validator("clerk_jwt_key")
@@ -183,6 +205,52 @@ class Settings(BaseSettings):
         if value is None:
             return None
         return value.replace("\\n", "\n")
+
+    @field_validator("storage_backend")
+    @classmethod
+    def validate_storage_backend(cls, value: str) -> str:
+        backend = value.strip().lower()
+        if backend not in SUPPORTED_STORAGE_BACKENDS:
+            raise ValueError(
+                f"STORAGE_BACKEND must be one of {sorted(SUPPORTED_STORAGE_BACKENDS)}"
+            )
+        return backend
+
+    @field_validator("storage_root", mode="before")
+    @classmethod
+    def normalize_storage_root(cls, value: object) -> Path:
+        path = Path(str(value)).expanduser()
+        if not path.is_absolute():
+            path = BACKEND_DIR / path
+        return path.resolve()
+
+    @field_validator("allowed_document_content_types")
+    @classmethod
+    def validate_allowed_document_content_types(cls, value: str) -> str:
+        content_types = [
+            item.strip().lower() for item in value.split(",") if item.strip()
+        ]
+        if not content_types:
+            raise ValueError(
+                "ALLOWED_DOCUMENT_CONTENT_TYPES must contain at least one content type"
+            )
+        return ",".join(content_types)
+
+    @field_validator("document_ingestion_version")
+    @classmethod
+    def validate_document_ingestion_version(cls, value: str) -> str:
+        version = value.strip()
+        if not version:
+            raise ValueError("DOCUMENT_INGESTION_VERSION must not be blank")
+        return version
+
+    @model_validator(mode="after")
+    def validate_ingestion_settings(self) -> Settings:
+        if self.document_chunk_overlap >= self.document_chunk_size:
+            raise ValueError(
+                "DOCUMENT_CHUNK_OVERLAP must be smaller than DOCUMENT_CHUNK_SIZE"
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_production_settings(self) -> Settings:
@@ -210,8 +278,7 @@ class Settings(BaseSettings):
             or password.lower() in WEAK_DATABASE_PASSWORDS
         ):
             raise ValueError(
-                "DATABASE_URL must not use weak placeholder credentials "
-                "in production"
+                "DATABASE_URL must not use weak placeholder credentials in production"
             )
 
         if not self.allowed_origins:
@@ -225,8 +292,7 @@ class Settings(BaseSettings):
 
         if not self.clerk_secret_key and not self.clerk_jwt_key:
             raise ValueError(
-                "CLERK_SECRET_KEY or CLERK_JWT_KEY must be configured "
-                "in production"
+                "CLERK_SECRET_KEY or CLERK_JWT_KEY must be configured in production"
             )
 
         if not self.clerk_authorized_parties_list:
@@ -250,11 +316,29 @@ class Settings(BaseSettings):
         return self
 
     @property
+    def max_request_body_bytes(self) -> int:
+        """Upper bound for any request body before multipart parsing.
+
+        Uploaded files are limited to ``max_upload_size_bytes``; the multipart
+        envelope needs a bounded allowance for headers, boundaries and form
+        fields. Applying the bound to every request is intentional so no
+        alternate request path can bypass it.
+        """
+
+        return self.max_upload_size_bytes + self.request_body_overhead_bytes
+
+    @property
     def allowed_origins(self) -> list[str]:
         return [
-            origin.strip()
-            for origin in self.cors_origins.split(",")
-            if origin.strip()
+            origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
+        ]
+
+    @property
+    def allowed_document_content_types_list(self) -> list[str]:
+        return [
+            item.strip().lower()
+            for item in self.allowed_document_content_types.split(",")
+            if item.strip()
         ]
 
     @property

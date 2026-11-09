@@ -80,6 +80,13 @@ class WorkflowRunStatus(str, PyEnum):
     FAILED = "failed"
 
 
+class IngestionStatus(str, PyEnum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    READY = "ready"
+    FAILED = "failed"
+
+
 def enum_type(
     enum_cls: type[PyEnum],
     name: str,
@@ -101,11 +108,12 @@ __all__ = [
     "ComplaintChannel",
     "ComplaintStatus",
     "EvidenceStatus",
+    "IngestionStatus",
     "MediaType",
     "MessageSenderType",
     "Priority",
     "UserRole",
-    "WorkflowRunStatus",
     "WorkOrderStatus",
+    "WorkflowRunStatus",
     "enum_type",
 ]

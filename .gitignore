@@ -21,6 +21,9 @@ htmlcov/
 node_modules/
 dist-ssr/
 
+# Private local document storage
+backend/var/
+
 # Logs
 logs/
 *.log

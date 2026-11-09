@@ -18,6 +18,7 @@ EXTRA_FIELDS = (
     "customer_id",
     "equipment_id",
     "complaint_id",
+    "document_id",
     "status_from",
     "status_to",
 )

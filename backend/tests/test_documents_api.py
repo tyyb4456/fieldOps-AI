@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from sqlalchemy import func, select
@@ -7,6 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
+from app.models.enums import IngestionStatus
+from app.services.storage import LocalFileStorage
+from tests.pdf_factory import build_pdf
 from tests.support import (
     bearer,
     seed_admin,
@@ -15,11 +19,15 @@ from tests.support import (
     seed_technician,
 )
 
-DOCUMENT_PAYLOAD = {
+DOCUMENT_METADATA = {
     "manufacturer": "Acme Solar",
     "model": "INV-5000",
     "document_name": "INV-5000 Technical Manual",
     "version": "1.0",
+}
+
+DOCUMENT_PAYLOAD = {
+    **DOCUMENT_METADATA,
     "file_path": "documents/acme/inv-5000-v1.pdf",
 }
 
@@ -28,16 +36,22 @@ async def _seed_admin_token(session: AsyncSession) -> tuple[Any, str]:
     return await seed_admin(session)
 
 
-async def _create_document(
+async def _upload_document(
     api_client: Any,
     admin_token: str,
+    *,
+    page_texts: list[str] | None = None,
+    filename: str = "inv-5000.pdf",
+    content_type: str = "application/pdf",
     **overrides: object,
 ) -> Any:
-    payload = {**DOCUMENT_PAYLOAD, **overrides}
+    metadata = {**DOCUMENT_METADATA, **overrides}
+    data = build_pdf(page_texts or ["Error E-05 requires inspection."])
     return await api_client.post(
         "/api/v1/admin/documents",
         headers=bearer(admin_token),
-        json=payload,
+        data=metadata,
+        files={"file": (filename, data, content_type)},
     )
 
 
@@ -45,7 +59,8 @@ async def _seed_document(
     session: AsyncSession,
     **overrides: object,
 ) -> Document:
-    values: dict[str, object] = {**DOCUMENT_PAYLOAD, **overrides}
+    values: dict[str, object] = {**DOCUMENT_PAYLOAD}
+    values.update(overrides)
     document = Document(**values)
     session.add(document)
     await session.commit()
@@ -77,13 +92,14 @@ async def test_document_endpoints_are_admin_only(
         assert response.json()["error"]["code"] == "forbidden"
 
 
-async def test_admin_registers_inactive_document_metadata(
+async def test_admin_uploads_inactive_ingested_document(
     api_client: Any,
     migrated_db_session: AsyncSession,
+    document_storage: LocalFileStorage,
 ) -> None:
-    _, admin_token = await _seed_admin_token(migrated_db_session)
+    admin, admin_token = await _seed_admin_token(migrated_db_session)
 
-    response = await _create_document(
+    response = await _upload_document(
         api_client,
         admin_token,
         manufacturer="  Acme Solar  ",
@@ -94,21 +110,44 @@ async def test_admin_registers_inactive_document_metadata(
     body = response.json()
     assert body["manufacturer"] == "Acme Solar"
     assert body["document_name"] == "INV-5000 Technical Manual"
+    assert body["original_filename"] == "inv-5000.pdf"
+    assert body["content_type"] == "application/pdf"
+    assert body["byte_size"] > 0
+    assert len(body["checksum_sha256"]) == 64
+    assert body["uploaded_by_id"] == str(admin.id)
+    assert body["ingestion_status"] == "ready"
     assert body["is_active"] is False
+    assert "file_path" not in body
+    assert "storage_key" not in body
+
+    chunks = await migrated_db_session.execute(
+        select(DocumentChunk)
+        .where(DocumentChunk.document_id == body["id"])
+        .order_by(DocumentChunk.chunk_index)
+    )
+    stored_chunks = list(chunks.scalars())
+    assert len(stored_chunks) == 1
+    assert stored_chunks[0].page_number == 1
+    assert stored_chunks[0].chunk_metadata["ingestion_version"] == "1"
+
+    stored_keys = list(document_storage.iter_keys())
+    assert len(stored_keys) == 1
 
 
-async def test_document_duplicate_returns_conflict(
+async def test_document_duplicate_returns_conflict_and_cleans_storage(
     api_client: Any,
     migrated_db_session: AsyncSession,
+    document_storage: LocalFileStorage,
 ) -> None:
     _, admin_token = await _seed_admin_token(migrated_db_session)
-    first = await _create_document(api_client, admin_token)
+    first = await _upload_document(api_client, admin_token)
     assert first.status_code == 201, first.text
 
-    duplicate = await _create_document(api_client, admin_token)
+    duplicate = await _upload_document(api_client, admin_token)
 
     assert duplicate.status_code == 409
     assert duplicate.json()["error"]["code"] == "document_conflict"
+    assert len(list(document_storage.iter_keys())) == 1
 
 
 async def test_document_list_filters_by_equipment_and_state(
@@ -123,6 +162,7 @@ async def test_document_list_filters_by_equipment_and_state(
         migrated_db_session,
         document_name="Active Manual",
         file_path="documents/acme/active.pdf",
+        ingestion_status=IngestionStatus.READY,
         is_active=True,
     )
     await _seed_document(
@@ -137,6 +177,7 @@ async def test_document_list_filters_by_equipment_and_state(
         model="X-100",
         document_name="Other Manual",
         file_path="documents/other/manual.pdf",
+        ingestion_status=IngestionStatus.READY,
         is_active=True,
     )
 
@@ -190,52 +231,60 @@ async def test_document_list_filters_by_equipment_and_state(
     assert len(paged.json()["items"]) == 1
 
 
-async def test_admin_reads_and_activates_document(
+async def test_admin_reads_and_updates_metadata_without_activation(
     api_client: Any,
     migrated_db_session: AsyncSession,
+    document_storage: LocalFileStorage,
 ) -> None:
     _, admin_token = await _seed_admin_token(migrated_db_session)
-    document = await _seed_document(migrated_db_session)
+    uploaded = await _upload_document(api_client, admin_token)
+    assert uploaded.status_code == 201, uploaded.text
+    document_id = uploaded.json()["id"]
 
     read = await api_client.get(
-        f"/api/v1/admin/documents/{document.id}",
+        f"/api/v1/admin/documents/{document_id}",
         headers=bearer(admin_token),
     )
     assert read.status_code == 200
-    assert read.json()["id"] == str(document.id)
+    assert read.json()["id"] == document_id
 
     updated = await api_client.patch(
-        f"/api/v1/admin/documents/{document.id}",
+        f"/api/v1/admin/documents/{document_id}",
         headers=bearer(admin_token),
-        json={
-            "is_active": True,
-            "version": "  2.0  ",
-        },
+        json={"version": "  2.0  "},
     )
     assert updated.status_code == 200, updated.text
-    assert updated.json()["is_active"] is True
     assert updated.json()["version"] == "2.0"
+    assert updated.json()["is_active"] is False
 
     empty = await api_client.patch(
-        f"/api/v1/admin/documents/{document.id}",
+        f"/api/v1/admin/documents/{document_id}",
         headers=bearer(admin_token),
         json={},
     )
     assert empty.status_code == 422
 
     null_name = await api_client.patch(
-        f"/api/v1/admin/documents/{document.id}",
+        f"/api/v1/admin/documents/{document_id}",
         headers=bearer(admin_token),
         json={"document_name": None},
     )
     assert null_name.status_code == 422
 
-    null_active = await api_client.patch(
-        f"/api/v1/admin/documents/{document.id}",
-        headers=bearer(admin_token),
-        json={"is_active": None},
-    )
-    assert null_active.status_code == 422
+    for field, value in (
+        ("is_active", True),
+        ("file_path", "public/evil.pdf"),
+        ("storage_key", "aa/evil.pdf"),
+        ("checksum_sha256", "b" * 64),
+        ("ingestion_status", "ready"),
+        ("uploaded_by_id", str(uuid.uuid4())),
+    ):
+        response = await api_client.patch(
+            f"/api/v1/admin/documents/{document_id}",
+            headers=bearer(admin_token),
+            json={field: value},
+        )
+        assert response.status_code == 422, field
 
     missing = await api_client.get(
         "/api/v1/admin/documents/00000000-0000-0000-0000-000000000000",
@@ -290,30 +339,26 @@ async def test_document_chunks_are_listed_in_order(
     assert missing_document.status_code == 404
 
 
-async def test_admin_delete_removes_document_and_chunks(
+async def test_admin_delete_removes_document_chunks_and_stored_file(
     api_client: Any,
     migrated_db_session: AsyncSession,
+    document_storage: LocalFileStorage,
 ) -> None:
     _, admin_token = await _seed_admin_token(migrated_db_session)
-    document = await _seed_document(migrated_db_session)
-    migrated_db_session.add(
-        DocumentChunk(
-            document_id=document.id,
-            chunk_index=0,
-            content="Chunk to be cascaded",
-        )
-    )
-    await migrated_db_session.commit()
+    uploaded = await _upload_document(api_client, admin_token)
+    assert uploaded.status_code == 201, uploaded.text
+    document_id = uploaded.json()["id"]
+    assert len(list(document_storage.iter_keys())) == 1
 
     deleted = await api_client.delete(
-        f"/api/v1/admin/documents/{document.id}",
+        f"/api/v1/admin/documents/{document_id}",
         headers=bearer(admin_token),
     )
 
     assert deleted.status_code == 204
 
     read_after = await api_client.get(
-        f"/api/v1/admin/documents/{document.id}",
+        f"/api/v1/admin/documents/{document_id}",
         headers=bearer(admin_token),
     )
     assert read_after.status_code == 404
@@ -321,6 +366,7 @@ async def test_admin_delete_removes_document_and_chunks(
     chunk_count = await migrated_db_session.scalar(
         select(func.count())
         .select_from(DocumentChunk)
-        .where(DocumentChunk.document_id == document.id)
+        .where(DocumentChunk.document_id == document_id)
     )
     assert chunk_count == 0
+    assert list(document_storage.iter_keys()) == []

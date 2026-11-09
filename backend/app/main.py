@@ -11,7 +11,10 @@ from app.api.router import api_router
 from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
-from app.core.middleware import RequestContextMiddleware
+from app.core.middleware import (
+    RequestBodyLimitMiddleware,
+    RequestContextMiddleware,
+)
 from app.db.session import dispose_engine
 
 logger = logging.getLogger(__name__)
@@ -42,6 +45,7 @@ def create_application() -> FastAPI:
         lifespan=lifespan,
     )
 
+    application.add_middleware(RequestBodyLimitMiddleware)
     application.add_middleware(RequestContextMiddleware)
     application.add_middleware(
         CORSMiddleware,

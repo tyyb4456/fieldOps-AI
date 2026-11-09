@@ -12,6 +12,8 @@ from pydantic import (
     model_validator,
 )
 
+from app.models.enums import IngestionStatus
+
 
 def _normalize_required_text(value: str) -> str:
     stripped = value.strip()
@@ -33,7 +35,14 @@ class DocumentResponse(BaseModel):
     model: str
     document_name: str
     version: str | None = None
-    file_path: str
+    original_filename: str | None = None
+    content_type: str | None = None
+    byte_size: int | None = None
+    checksum_sha256: str | None = None
+    uploaded_by_id: uuid.UUID | None = None
+    ingestion_status: IngestionStatus
+    ingestion_error: str | None = None
+    ingested_at: datetime | None = None
     is_active: bool
     created_at: datetime
 
@@ -61,37 +70,6 @@ class DocumentChunkListResponse(BaseModel):
     offset: int
 
 
-class DocumentCreate(BaseModel):
-    """Register document metadata.
-
-    Binary content and document chunks are not accepted here. New documents
-    start inactive and must be explicitly approved by an administrator.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    manufacturer: str = Field(min_length=1, max_length=150)
-    model: str = Field(min_length=1, max_length=150)
-    document_name: str = Field(min_length=1, max_length=255)
-    version: str | None = Field(default=None, max_length=100)
-    file_path: str = Field(min_length=1, max_length=2000)
-
-    @field_validator(
-        "manufacturer",
-        "model",
-        "document_name",
-        "file_path",
-    )
-    @classmethod
-    def normalize_required_text(cls, value: str) -> str:
-        return _normalize_required_text(value)
-
-    @field_validator("version")
-    @classmethod
-    def normalize_version(cls, value: str | None) -> str | None:
-        return _normalize_optional_text(value)
-
-
 class DocumentUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -107,18 +85,11 @@ class DocumentUpdate(BaseModel):
         max_length=255,
     )
     version: str | None = Field(default=None, max_length=100)
-    file_path: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=2000,
-    )
-    is_active: bool | None = None
 
     @field_validator(
         "manufacturer",
         "model",
         "document_name",
-        "file_path",
     )
     @classmethod
     def normalize_required_text(cls, value: str | None) -> str:
@@ -130,13 +101,6 @@ class DocumentUpdate(BaseModel):
     @classmethod
     def normalize_version(cls, value: str | None) -> str | None:
         return _normalize_optional_text(value)
-
-    @field_validator("is_active")
-    @classmethod
-    def reject_null_is_active(cls, value: bool | None) -> bool:
-        if value is None:
-            raise ValueError("is_active may not be null")
-        return value
 
     @model_validator(mode="after")
     def require_at_least_one_field(self) -> DocumentUpdate:

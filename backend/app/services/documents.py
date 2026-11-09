@@ -7,9 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
+from app.models.enums import IngestionStatus
 from app.models.equipment import Equipment
-from app.schemas.document import DocumentCreate, DocumentUpdate
+from app.schemas.document import DocumentUpdate
 from app.services.authorization import AccessDeniedError
+from app.services.document_ingestion import UploadedPdf
 
 
 async def list_documents(
@@ -68,17 +70,30 @@ async def get_document(
     return document
 
 
-async def create_document(
+async def create_uploaded_document(
     session: AsyncSession,
     *,
-    data: DocumentCreate,
+    uploaded: UploadedPdf,
+    storage_key: str,
+    manufacturer: str,
+    model: str,
+    document_name: str,
+    version: str | None,
+    uploaded_by_id: uuid.UUID,
 ) -> Document:
     document = Document(
-        manufacturer=data.manufacturer,
-        model=data.model,
-        document_name=data.document_name,
-        version=data.version,
-        file_path=data.file_path,
+        manufacturer=manufacturer,
+        model=model,
+        document_name=document_name,
+        version=version,
+        file_path=None,
+        storage_key=storage_key,
+        original_filename=uploaded.original_filename,
+        content_type=uploaded.content_type,
+        byte_size=len(uploaded.data),
+        checksum_sha256=uploaded.checksum_sha256,
+        uploaded_by_id=uploaded_by_id,
+        ingestion_status=IngestionStatus.PENDING,
         is_active=False,
     )
     session.add(document)

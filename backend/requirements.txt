@@ -5,6 +5,7 @@ langchain[google-genai]
 
 chromadb
 langchain-chroma
+langchain-community
 langchain-text-splitters
 
 pydantic
@@ -27,3 +28,7 @@ alembic
 clerk-backend-api
 
 pypdf
+python-multipart
+
+ruff 
+mypy
