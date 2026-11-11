@@ -14,6 +14,7 @@ from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
 from app.models.enums import IngestionStatus
 from app.services.document_ingestion import (
+    INGESTION_ERROR_EMBEDDING,
     INGESTION_ERROR_EMPTY,
     INGESTION_ERROR_INTEGRITY,
     PdfValidationError,
@@ -22,6 +23,7 @@ from app.services.document_ingestion import (
     split_page_documents,
 )
 from app.services.storage import LocalFileStorage
+from app.services.vector_index import VectorIndexError
 from tests.pdf_factory import build_encrypted_pdf, build_pdf
 from tests.support import bearer, seed_admin
 
@@ -295,10 +297,39 @@ async def test_chunk_metadata_tracks_pages_and_offsets(
     }
 
 
+async def test_embedding_failure_marks_ingestion_failed(
+    api_client: Any,
+    migrated_db_session: AsyncSession,
+    vector_index: Any,
+) -> None:
+    _, admin_token = await seed_admin(migrated_db_session)
+    vector_index.add_error = VectorIndexError("embedding provider unavailable")
+
+    response = await _upload(api_client, admin_token, ["Manual text"])
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["ingestion_status"] == "failed"
+    assert body["ingestion_error"] == INGESTION_ERROR_EMBEDDING
+    assert body["is_active"] is False
+
+    chunks = await migrated_db_session.execute(
+        select(DocumentChunk).where(DocumentChunk.document_id == body["id"])
+    )
+    assert list(chunks.scalars()) == []
+
+    activated = await api_client.post(
+        f"/api/v1/admin/documents/{body['id']}/activate",
+        headers=bearer(admin_token),
+    )
+    assert activated.status_code == 409
+
+
 async def test_reingestion_atomically_replaces_chunks(
     api_client: Any,
     migrated_db_session: AsyncSession,
     document_storage: LocalFileStorage,
+    vector_index: Any,
 ) -> None:
     _, admin_token = await seed_admin(migrated_db_session)
     uploaded = await _upload(api_client, admin_token, ["Original manual text"])
@@ -343,6 +374,13 @@ async def test_reingestion_atomically_replaces_chunks(
     )
     contents = [chunk.content for chunk in chunks.scalars()]
     assert contents == ["Replacement manual text"]
+
+    assert len(vector_index.added_chunks) == 2
+    indexed_document_id, indexed_chunks = vector_index.added_chunks[-1]
+    assert str(indexed_document_id) == document_id
+    assert [chunk.content for chunk in indexed_chunks] == [
+        "Replacement manual text"
+    ]
 
 
 async def test_reingestion_parses_pdf_once(
@@ -436,6 +474,65 @@ async def test_failed_reingestion_preserves_old_chunks_and_deactivates(
         select(DocumentChunk).where(DocumentChunk.document_id == document_id)
     )
     assert [chunk.content for chunk in chunks.scalars()] == ["Stable manual text"]
+
+
+async def test_failed_replacement_embedding_preserves_previous_chunks(
+    api_client: Any,
+    migrated_db_session: AsyncSession,
+    document_storage: LocalFileStorage,
+    vector_index: Any,
+) -> None:
+    _, admin_token = await seed_admin(migrated_db_session)
+    uploaded = await _upload(api_client, admin_token, ["Stable manual text"])
+    assert uploaded.status_code == 201, uploaded.text
+    document_id = uploaded.json()["id"]
+
+    activated = await api_client.post(
+        f"/api/v1/admin/documents/{document_id}/activate",
+        headers=bearer(admin_token),
+    )
+    assert activated.status_code == 200, activated.text
+
+    original_chunks = await migrated_db_session.execute(
+        select(DocumentChunk).where(DocumentChunk.document_id == document_id)
+    )
+    original = list(original_chunks.scalars())
+    assert [chunk.content for chunk in original] == ["Stable manual text"]
+
+    storage_key = await migrated_db_session.scalar(
+        select(Document.storage_key).where(Document.id == document_id)
+    )
+    assert storage_key is not None
+    replacement = build_pdf(["Replacement manual text"])
+    document_storage.save(storage_key, replacement, overwrite=True)
+    document = await migrated_db_session.get(Document, document_id)
+    assert document is not None
+    document.byte_size = len(replacement)
+    document.checksum_sha256 = hashlib.sha256(replacement).hexdigest()
+    await migrated_db_session.commit()
+
+    vector_index.embed_error = VectorIndexError("provider unavailable")
+
+    response = await api_client.post(
+        f"/api/v1/admin/documents/{document_id}/ingest",
+        headers=bearer(admin_token),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["ingestion_status"] == "failed"
+    assert body["is_active"] is False
+    assert body["ingestion_error"] == INGESTION_ERROR_EMBEDDING
+
+    chunks = await migrated_db_session.execute(
+        select(DocumentChunk).where(DocumentChunk.document_id == document_id)
+    )
+    stored = list(chunks.scalars())
+    assert [chunk.content for chunk in stored] == ["Stable manual text"]
+    assert {chunk.id for chunk in stored} == {chunk.id for chunk in original}
+    assert all(chunk.is_current for chunk in stored)
+
+    assert len(vector_index.added_chunks) == 1
 
 
 async def test_concurrent_ingestion_is_rejected(

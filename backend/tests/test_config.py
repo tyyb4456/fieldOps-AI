@@ -27,6 +27,11 @@ ENV_KEYS = (
     "AUTH_BOOTSTRAP_RATE_LIMIT_PER_IP",
     "AUTH_BOOTSTRAP_RATE_LIMIT_PER_SUBJECT",
     "AUTH_BOOTSTRAP_RATE_LIMIT_WINDOW_SECONDS",
+    "GOOGLE_API_KEY",
+    "EMBEDDING_MODEL",
+    "EMBEDDING_DIMENSIONS",
+    "RETRIEVAL_DEFAULT_TOP_K",
+    "RETRIEVAL_MAX_TOP_K",
 )
 
 PRODUCTION_DATABASE_URL = (
@@ -44,6 +49,7 @@ def production_settings(**overrides: object) -> Settings:
         "cors_origins": "https://app.example.com",
         "clerk_secret_key": "sk_test_production_placeholder",
         "clerk_authorized_parties": "https://app.example.com",
+        "google_api_key": "test-google-api-key",
     }
     values.update(overrides)
     return Settings(**values)
@@ -70,6 +76,11 @@ def test_default_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.auth_bootstrap_rate_limit_per_ip == 30
     assert settings.auth_bootstrap_rate_limit_per_subject == 10
     assert settings.auth_bootstrap_rate_limit_window_seconds == 60
+    assert settings.google_api_key is None
+    assert settings.embedding_model == "gemini-embedding-001"
+    assert settings.embedding_dimensions == 1536
+    assert settings.retrieval_default_top_k == 5
+    assert settings.retrieval_max_top_k == 20
 
 
 @pytest.mark.parametrize(
@@ -343,3 +354,31 @@ def test_production_rejects_wildcard_clerk_authorized_parties() -> None:
 def test_production_rejects_empty_clerk_authorized_parties() -> None:
     with pytest.raises(ValidationError):
         production_settings(clerk_authorized_parties=" , ")
+
+
+def test_google_api_key_is_trimmed_and_blank_is_none() -> None:
+    settings = Settings(_env_file=None, google_api_key="  test-key  ")
+
+    assert settings.google_api_key == "test-key"
+    assert Settings(_env_file=None, google_api_key="   ").google_api_key is None
+
+
+def test_embedding_dimensions_are_fixed_for_current_schema() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, embedding_dimensions=768)
+
+
+def test_retrieval_top_k_settings_are_bounded() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, retrieval_default_top_k=0)
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            retrieval_default_top_k=10,
+            retrieval_max_top_k=5,
+        )
+
+
+def test_production_requires_google_api_key() -> None:
+    with pytest.raises(ValidationError):
+        production_settings(google_api_key=None)

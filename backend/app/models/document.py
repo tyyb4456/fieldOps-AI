@@ -53,6 +53,7 @@ class Document(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
             name="active_requires_ready",
         ),
         Index("ix_documents_ingestion_status", "ingestion_status"),
+        Index("ix_documents_embedding_model", "embedding_model"),
     )
 
     manufacturer: Mapped[str] = mapped_column(String(150), nullable=False)
@@ -97,6 +98,10 @@ class Document(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     )
     ingestion_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
+        nullable=True,
+    )
+    embedding_model: Mapped[str | None] = mapped_column(
+        String(100),
         nullable=True,
     )
     is_active: Mapped[bool] = mapped_column(

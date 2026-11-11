@@ -130,11 +130,17 @@ async def list_document_chunks(
     total = await session.scalar(
         select(func.count())
         .select_from(DocumentChunk)
-        .where(DocumentChunk.document_id == document_id)
+        .where(
+            DocumentChunk.document_id == document_id,
+            DocumentChunk.is_current.is_(True),
+        )
     )
     result = await session.execute(
         select(DocumentChunk)
-        .where(DocumentChunk.document_id == document_id)
+        .where(
+            DocumentChunk.document_id == document_id,
+            DocumentChunk.is_current.is_(True),
+        )
         .order_by(
             DocumentChunk.chunk_index.asc(),
             DocumentChunk.id.asc(),

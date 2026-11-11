@@ -7,6 +7,7 @@ from app.models.conversation import Conversation
 from app.models.customer import Customer
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
+from app.models.document_chunk_embedding import DocumentChunkEmbedding
 from app.models.equipment import Equipment
 from app.models.message import Message
 from app.models.service_record import ServiceRecord
@@ -24,6 +25,7 @@ __all__ = [
     "Customer",
     "Document",
     "DocumentChunk",
+    "DocumentChunkEmbedding",
     "Equipment",
     "Message",
     "ServiceRecord",

@@ -12,6 +12,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.api.dependencies.auth import require_admin_user
 from app.api.dependencies.storage import get_document_storage
+from app.api.dependencies.vector_index import get_vector_index
 from app.api.serializers import (
     document_chunk_response,
     document_response,
@@ -49,6 +50,7 @@ from app.services.storage_coordination import (
     STORAGE_OPERATION_LOCK_KEY,
     advisory_lock,
 )
+from app.services.vector_index import VectorIndex
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +169,7 @@ async def upload_document(
     admin: User = Depends(require_admin_user),
     session: AsyncSession = Depends(get_db_session),
     storage: DocumentStorage = Depends(get_document_storage),
+    vector_index: VectorIndex = Depends(get_vector_index),
 ) -> DocumentResponse:
     manufacturer = _clean_required(manufacturer, "manufacturer")
     model = _clean_required(model, "model")
@@ -278,6 +281,7 @@ async def upload_document(
         session,
         document.id,
         storage,
+        vector_index,
         max_pages=settings.max_pdf_pages,
         chunk_size=settings.document_chunk_size,
         chunk_overlap=settings.document_chunk_overlap,
@@ -405,6 +409,7 @@ async def ingest_stored_document(
     admin: User = Depends(require_admin_user),
     session: AsyncSession = Depends(get_db_session),
     storage: DocumentStorage = Depends(get_document_storage),
+    vector_index: VectorIndex = Depends(get_vector_index),
 ) -> DocumentResponse:
     actor_id = admin.id
     try:
@@ -412,6 +417,7 @@ async def ingest_stored_document(
             session,
             document_id,
             storage,
+            vector_index,
             max_pages=settings.max_pdf_pages,
             chunk_size=settings.document_chunk_size,
             chunk_overlap=settings.document_chunk_overlap,

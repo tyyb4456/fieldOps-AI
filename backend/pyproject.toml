@@ -26,6 +26,10 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.1.6",
     "uvicorn[standard]>=0.54.0",
     "langchain-community>=0.4.0",
+    "langchain-postgres>=0.0.19",
+    "pgvector>=0.3.6",
+    "psycopg[binary]>=3.3.8",
+    "langchain-google-genai>=3.2.0",
 ]
 
 [tool.pytest.ini_options]

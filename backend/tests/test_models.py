@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, inspect
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import configure_mappers
@@ -15,14 +16,15 @@ from app.models import (
     Customer,
     Document,
     DocumentChunk,
+    DocumentChunkEmbedding,
     Equipment,
     Message,
     ServiceRecord,
     Technician,
     TechnicianAssignment,
     User,
-    WorkOrder,
     WorkflowRun,
+    WorkOrder,
 )
 
 EXPECTED_TABLES = {
@@ -40,6 +42,7 @@ EXPECTED_TABLES = {
     "completion_reports",
     "documents",
     "document_chunks",
+    "document_chunk_embeddings",
     "workflow_runs",
 }
 
@@ -58,6 +61,7 @@ EXPECTED_MODELS = {
     "CompletionReport": CompletionReport,
     "Document": Document,
     "DocumentChunk": DocumentChunk,
+    "DocumentChunkEmbedding": DocumentChunkEmbedding,
     "WorkflowRun": WorkflowRun,
 }
 
@@ -94,16 +98,17 @@ EXPECTED_RELATIONSHIPS = {
     CompletionReport: {"work_order", "service_record"},
     Document: {"chunks"},
     DocumentChunk: {"document"},
+    DocumentChunkEmbedding: set(),
     WorkflowRun: {"complaint"},
 }
 
 
-def test_all_fifteen_models_are_registered() -> None:
+def test_all_sixteen_models_are_registered() -> None:
     configure_mappers()
 
     table_names = set(Base.metadata.tables)
     assert table_names == EXPECTED_TABLES
-    assert len(table_names) == 15
+    assert len(table_names) == 16
 
     for name, model in EXPECTED_MODELS.items():
         assert model.__name__ == name
@@ -115,12 +120,21 @@ def test_all_fifteen_models_are_registered() -> None:
 
 def test_every_model_uses_uuid_primary_key_with_server_default() -> None:
     for table in Base.metadata.tables.values():
+        if table.name == DocumentChunkEmbedding.__tablename__:
+            continue
         primary_key = table.primary_key
         assert [column.name for column in primary_key.columns] == ["id"]
         id_column = primary_key.columns["id"]
         assert id_column.type.python_type is uuid.UUID
         assert id_column.server_default is not None
         assert "gen_random_uuid" in str(id_column.server_default.arg)
+
+    embedding_id = DocumentChunkEmbedding.__table__.c["id"]
+    assert embedding_id.type.python_type is uuid.UUID
+    assert embedding_id.server_default is None
+    assert [fk.target_fullname for fk in embedding_id.foreign_keys] == [
+        "document_chunks.id"
+    ]
 
 
 RESTRICT_RELATIONSHIPS = {
@@ -183,6 +197,7 @@ def test_jsonb_columns_are_declared() -> None:
         (WorkOrder.__tablename__, "diagnostic_checklist"),
         (ServiceRecord.__tablename__, "parts_used"),
         (DocumentChunk.__tablename__, "metadata"),
+        (DocumentChunkEmbedding.__tablename__, "langchain_metadata"),
     }
 
     for table_name, column_name in jsonb_columns:
@@ -233,6 +248,14 @@ def test_document_version_uniqueness_uses_nulls_not_distinct() -> None:
 
 def test_embedding_column_is_intentionally_deferred() -> None:
     assert "embedding" not in DocumentChunk.__table__.c
+
+
+def test_vector_embedding_column_uses_fixed_pgvector_dimensions() -> None:
+    embedding = DocumentChunkEmbedding.__table__.c["embedding"]
+
+    assert isinstance(embedding.type, Vector)
+    assert embedding.type.dim == 1536
+    assert embedding.nullable is False
 
 
 def test_composite_integrity_constraints_are_registered() -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,11 +37,14 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool
 
 from app.api.dependencies.storage import get_document_storage
+from app.api.dependencies.vector_index import get_vector_index
 from app.core.config import settings
 from app.db.session import get_db_session
 from app.main import app
+from app.models.document_chunk import DocumentChunk
 from app.services.rate_limit import reset_rate_limiters
 from app.services.storage import LocalFileStorage
+from app.services.vector_index import VectorSearchHit
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
@@ -94,6 +97,54 @@ class MigrationDatabase:
     url: str
     config: Config
     name: str
+
+
+class FakeVectorIndex:
+    def __init__(self) -> None:
+        self.added_chunks: list[tuple[uuid.UUID, list[DocumentChunk]]] = []
+        self.search_hits: list[VectorSearchHit] = []
+        self.search_calls: list[tuple[str, list[uuid.UUID], int]] = []
+        self.embed_error: Exception | None = None
+        self.add_error: Exception | None = None
+        self.search_error: Exception | None = None
+        self.embedding_model = "gemini-embedding-001"
+
+    async def embed_chunks(
+        self,
+        chunks: Sequence[object],
+    ) -> list[list[float]]:
+        if self.embed_error is not None:
+            raise self.embed_error
+        return [
+            [1.0] + [0.0] * 1535
+            for _ in chunks
+        ]
+
+    async def add_chunks(
+        self,
+        *,
+        document_id: uuid.UUID,
+        chunks: Sequence[DocumentChunk],
+        embeddings: Sequence[Sequence[float]] | None = None,
+    ) -> None:
+        if self.add_error is not None:
+            raise self.add_error
+        self.added_chunks.append((document_id, list(chunks)))
+
+    async def search(
+        self,
+        *,
+        query: str,
+        document_ids: Sequence[uuid.UUID],
+        k: int,
+    ) -> list[VectorSearchHit]:
+        self.search_calls.append((query, list(document_ids), k))
+        if self.search_error is not None:
+            raise self.search_error
+        return list(self.search_hits[:k])
+
+    async def close(self) -> None:
+        return None
 
 
 def _sync_url(url: str) -> URL:
@@ -297,6 +348,16 @@ async def api_client(
     finally:
         app.dependency_overrides.pop(get_db_session, None)
         await engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def vector_index() -> Iterator[FakeVectorIndex]:
+    fake_index = FakeVectorIndex()
+    app.dependency_overrides[get_vector_index] = lambda: fake_index
+    try:
+        yield fake_index
+    finally:
+        app.dependency_overrides.pop(get_vector_index, None)
 
 
 @pytest.fixture(autouse=True)

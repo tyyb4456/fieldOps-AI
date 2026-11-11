@@ -21,6 +21,10 @@ DEFAULT_DOCUMENT_CHUNK_OVERLAP = 200
 DEFAULT_DOCUMENT_INGESTION_VERSION = "1"
 DEFAULT_REQUEST_BODY_OVERHEAD_BYTES = 64 * 1024
 DEFAULT_INGESTION_STALE_AFTER_SECONDS = 30 * 60
+DEFAULT_EMBEDDING_MODEL = "gemini-embedding-001"
+DEFAULT_EMBEDDING_DIMENSIONS = 1536
+DEFAULT_RETRIEVAL_TOP_K = 5
+DEFAULT_RETRIEVAL_MAX_TOP_K = 20
 SUPPORTED_STORAGE_BACKENDS = frozenset({"local"})
 
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
@@ -106,6 +110,23 @@ class Settings(BaseSettings):
         ge=0,
     )
     document_ingestion_version: str = DEFAULT_DOCUMENT_INGESTION_VERSION
+
+    google_api_key: str | None = None
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
+    embedding_dimensions: int = Field(
+        default=DEFAULT_EMBEDDING_DIMENSIONS,
+        ge=1,
+    )
+    retrieval_default_top_k: int = Field(
+        default=DEFAULT_RETRIEVAL_TOP_K,
+        ge=1,
+        le=DEFAULT_RETRIEVAL_MAX_TOP_K,
+    )
+    retrieval_max_top_k: int = Field(
+        default=DEFAULT_RETRIEVAL_MAX_TOP_K,
+        ge=1,
+        le=100,
+    )
 
     auth_bootstrap_rate_limit_per_ip: int = Field(default=30, ge=1)
     auth_bootstrap_rate_limit_per_subject: int = Field(default=10, ge=1)
@@ -244,6 +265,39 @@ class Settings(BaseSettings):
             raise ValueError("DOCUMENT_INGESTION_VERSION must not be blank")
         return version
 
+    @field_validator("google_api_key", mode="before")
+    @classmethod
+    def normalize_google_api_key(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator("embedding_model")
+    @classmethod
+    def validate_embedding_model(cls, value: str) -> str:
+        model = value.strip()
+        if not model:
+            raise ValueError("EMBEDDING_MODEL must not be blank")
+        return model
+
+    @model_validator(mode="after")
+    def validate_embedding_settings(self) -> Settings:
+        if self.embedding_dimensions != DEFAULT_EMBEDDING_DIMENSIONS:
+            raise ValueError(
+                "EMBEDDING_DIMENSIONS is fixed at "
+                f"{DEFAULT_EMBEDDING_DIMENSIONS} for the current pgvector "
+                "schema. Change the embedding model and vector-column "
+                "migration together before changing it."
+            )
+        if self.retrieval_default_top_k > self.retrieval_max_top_k:
+            raise ValueError(
+                "RETRIEVAL_DEFAULT_TOP_K must not exceed RETRIEVAL_MAX_TOP_K"
+            )
+        return self
+
     @model_validator(mode="after")
     def validate_ingestion_settings(self) -> Settings:
         if self.document_chunk_overlap >= self.document_chunk_size:
@@ -298,6 +352,12 @@ class Settings(BaseSettings):
         if not self.clerk_authorized_parties_list:
             raise ValueError(
                 "CLERK_AUTHORIZED_PARTIES must be configured in production"
+            )
+
+        if not self.google_api_key:
+            raise ValueError(
+                "GOOGLE_API_KEY must be configured in production for "
+                "document embeddings"
             )
 
         if self.db_echo:

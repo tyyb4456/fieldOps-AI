@@ -96,6 +96,7 @@ async def test_admin_uploads_inactive_ingested_document(
     api_client: Any,
     migrated_db_session: AsyncSession,
     document_storage: LocalFileStorage,
+    vector_index: Any,
 ) -> None:
     admin, admin_token = await _seed_admin_token(migrated_db_session)
 
@@ -129,6 +130,14 @@ async def test_admin_uploads_inactive_ingested_document(
     assert len(stored_chunks) == 1
     assert stored_chunks[0].page_number == 1
     assert stored_chunks[0].chunk_metadata["ingestion_version"] == "1"
+
+    assert len(vector_index.added_chunks) == 1
+    indexed_document_id, indexed_chunks = vector_index.added_chunks[0]
+    assert str(indexed_document_id) == body["id"]
+    assert [chunk.id for chunk in indexed_chunks] == [
+        stored_chunks[0].id
+    ]
+    assert indexed_chunks[0].content == "Error E-05 requires inspection."
 
     stored_keys = list(document_storage.iter_keys())
     assert len(stored_keys) == 1

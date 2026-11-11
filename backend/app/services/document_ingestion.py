@@ -13,7 +13,7 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_core.documents import Document as LangChainDocument
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf.errors import FileNotDecryptedError
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
@@ -26,6 +26,7 @@ from app.services.storage_coordination import (
     advisory_lock,
     document_ingestion_lock_key,
 )
+from app.services.vector_index import VectorIndex
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,9 @@ INGESTION_ERROR_INTEGRITY = (
     "The stored document does not match its recorded integrity metadata."
 )
 INGESTION_ERROR_UNEXPECTED = "The document could not be processed."
+INGESTION_ERROR_EMBEDDING = (
+    "The document could not be embedded for retrieval."
+)
 INGESTION_ERROR_RECOVERED = (
     "The previous ingestion was interrupted. Re-ingest the document."
 )
@@ -386,12 +390,56 @@ async def _mark_processing(
     return document
 
 
+def _build_staged_chunks(
+    document_id: uuid.UUID,
+    chunks: list[ChunkDraft],
+    *,
+    ingestion_version: str,
+) -> list[DocumentChunk]:
+    """Build the replacement chunk set without touching the current set.
+
+    IDs are assigned before persistence so the vector store can write rows for
+    the exact chunk identities that will later be promoted.
+    """
+
+    return [
+        DocumentChunk(
+            id=uuid.uuid4(),
+            document_id=document_id,
+            chunk_index=chunk.chunk_index,
+            content=chunk.content,
+            page_number=chunk.page_number,
+            chunk_metadata=_chunk_metadata(
+                chunk,
+                ingestion_version=ingestion_version,
+            ),
+            is_current=False,
+        )
+        for chunk in chunks
+    ]
+
+
+async def _discard_staged_chunks(
+    session: AsyncSession,
+    document_id: uuid.UUID,
+) -> None:
+    """Remove any incomplete replacement chunks and their cascaded vectors."""
+
+    await session.execute(
+        delete(DocumentChunk).where(
+            DocumentChunk.document_id == document_id,
+            DocumentChunk.is_current.is_(False),
+        )
+    )
+
+
 async def _mark_failed(
     session: AsyncSession,
     document_id: uuid.UUID,
     message: str,
 ) -> Document:
     document = await _lock_document(session, document_id)
+    await _discard_staged_chunks(session, document_id)
     document.ingestion_status = IngestionStatus.FAILED
     document.ingestion_error = message
     document.ingestion_started_at = None
@@ -400,37 +448,72 @@ async def _mark_failed(
     return document
 
 
-async def _persist_chunks(
+async def _stage_chunks(
     session: AsyncSession,
     document_id: uuid.UUID,
-    chunks: list[ChunkDraft],
-    *,
-    ingestion_version: str,
+    stored_chunks: list[DocumentChunk],
 ) -> Document:
+    """Persist replacement chunks while the previous current set stays intact."""
+
     try:
         document = await _lock_document(session, document_id)
+        await _discard_staged_chunks(session, document_id)
+        session.add_all(stored_chunks)
+        document.ingestion_status = IngestionStatus.PROCESSING
+        document.ingestion_error = None
+        document.ingestion_started_at = datetime.now(UTC)
+        await session.commit()
+        return document
+    except Exception:
+        await session.rollback()
+        raise
+
+
+async def _promote_staged_chunks(
+    session: AsyncSession,
+    document_id: uuid.UUID,
+    staged_chunks: list[DocumentChunk],
+    *,
+    embedding_model: str,
+) -> Document:
+    """Atomically swap the staged replacement set into the current set.
+
+    The previous current chunks are deleted only inside this transaction, after
+    replacement embeddings have already been written. Deleting them cascades the
+    previous vector rows. Any failure rolls the whole swap back, leaving the
+    previous current chunks and embeddings intact.
+    """
+
+    try:
+        document = await _lock_document(session, document_id)
+        if document.ingestion_status is not IngestionStatus.PROCESSING:
+            await session.rollback()
+            raise DocumentNotReadyError(
+                "Document ingestion was interrupted before indexing completed."
+            )
+
+        staged_ids = [chunk.id for chunk in staged_chunks]
         await session.execute(
-            delete(DocumentChunk).where(DocumentChunk.document_id == document_id)
+            delete(DocumentChunk).where(
+                DocumentChunk.document_id == document_id,
+                DocumentChunk.is_current.is_(True),
+            )
         )
-        session.add_all(
-            [
-                DocumentChunk(
-                    document_id=document_id,
-                    chunk_index=chunk.chunk_index,
-                    content=chunk.content,
-                    page_number=chunk.page_number,
-                    chunk_metadata=_chunk_metadata(
-                        chunk,
-                        ingestion_version=ingestion_version,
-                    ),
-                )
-                for chunk in chunks
-            ]
+        await session.execute(
+            update(DocumentChunk)
+            .where(
+                DocumentChunk.document_id == document_id,
+                DocumentChunk.id.in_(staged_ids),
+                DocumentChunk.is_current.is_(False),
+            )
+            .values(is_current=True)
         )
+
         document.ingestion_status = IngestionStatus.READY
         document.ingestion_error = None
         document.ingestion_started_at = None
         document.ingested_at = datetime.now(UTC)
+        document.embedding_model = embedding_model
         await session.commit()
         return document
     except Exception:
@@ -442,6 +525,7 @@ async def _ingest_document_locked(
     session: AsyncSession,
     document_id: uuid.UUID,
     storage: DocumentStorage,
+    vector_index: VectorIndex,
     *,
     max_pages: int,
     chunk_size: int,
@@ -506,13 +590,33 @@ async def _ingest_document_locked(
             INGESTION_ERROR_UNEXPECTED,
         )
 
+    staged_chunks = _build_staged_chunks(
+        document_id,
+        chunks,
+        ingestion_version=ingestion_version,
+    )
+
+    # Generate embeddings before staging anything. A provider failure leaves the
+    # previous current chunk and vector set completely untouched.
     try:
-        return await _persist_chunks(
+        embeddings = await vector_index.embed_chunks(staged_chunks)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Document embedding failed",
+            extra={
+                "event": "document_ingestion_embedding_failed",
+                "document_id": str(document_id),
+                "error_type": type(exc).__name__,
+            },
+        )
+        return await _mark_failed(
             session,
             document_id,
-            chunks,
-            ingestion_version=ingestion_version,
+            INGESTION_ERROR_EMBEDDING,
         )
+
+    try:
+        await _stage_chunks(session, document_id, staged_chunks)
     except IngestionInProgressError:
         raise
     except Exception:  # noqa: BLE001
@@ -529,11 +633,56 @@ async def _ingest_document_locked(
             INGESTION_ERROR_UNEXPECTED,
         )
 
+    try:
+        await vector_index.add_chunks(
+            document_id=document_id,
+            chunks=staged_chunks,
+            embeddings=embeddings,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Document embedding storage failed",
+            extra={
+                "event": "document_ingestion_embedding_failed",
+                "document_id": str(document_id),
+                "error_type": type(exc).__name__,
+            },
+        )
+        return await _mark_failed(
+            session,
+            document_id,
+            INGESTION_ERROR_EMBEDDING,
+        )
+
+    try:
+        return await _promote_staged_chunks(
+            session,
+            document_id,
+            staged_chunks,
+            embedding_model=vector_index.embedding_model,
+        )
+    except IngestionInProgressError:
+        raise
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Document indexing finalization failed",
+            extra={
+                "event": "document_ingestion_finalization_failed",
+                "document_id": str(document_id),
+            },
+        )
+        return await _mark_failed(
+            session,
+            document_id,
+            INGESTION_ERROR_UNEXPECTED,
+        )
+
 
 async def ingest_document(
     session: AsyncSession,
     document_id: uuid.UUID,
     storage: DocumentStorage,
+    vector_index: VectorIndex,
     *,
     max_pages: int,
     chunk_size: int,
@@ -552,6 +701,7 @@ async def ingest_document(
             session,
             document_id,
             storage,
+            vector_index,
             max_pages=max_pages,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
@@ -613,7 +763,10 @@ async def activate_document(
     chunk_count = await session.scalar(
         select(func.count())
         .select_from(DocumentChunk)
-        .where(DocumentChunk.document_id == document_id)
+        .where(
+            DocumentChunk.document_id == document_id,
+            DocumentChunk.is_current.is_(True),
+        )
     )
     if not chunk_count:
         await session.rollback()
@@ -660,7 +813,10 @@ async def activate_document(
     chunk_count = await session.scalar(
         select(func.count())
         .select_from(DocumentChunk)
-        .where(DocumentChunk.document_id == document_id)
+        .where(
+            DocumentChunk.document_id == document_id,
+            DocumentChunk.is_current.is_(True),
+        )
     )
     if not chunk_count:
         await session.rollback()
@@ -743,6 +899,7 @@ async def recover_stale_processing_document(
                     code="ingestion_active",
                 )
 
+        await _discard_staged_chunks(session, document_id)
         document.ingestion_status = IngestionStatus.FAILED
         document.ingestion_error = INGESTION_ERROR_RECOVERED
         document.ingestion_started_at = None

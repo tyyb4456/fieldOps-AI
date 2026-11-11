@@ -4,12 +4,14 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     ForeignKey,
+    Index,
     Integer,
     Text,
-    UniqueConstraint,
     text,
+    true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -19,14 +21,26 @@ from app.db.base import Base, UUIDPrimaryKeyMixin
 if TYPE_CHECKING:
     from app.models.document import Document
 
+CHUNK_CURRENT_UNIQUE_INDEX = (
+    "uq_document_chunks_document_id_chunk_index_current"
+)
+CHUNK_CURRENT_LOOKUP_INDEX = "ix_document_chunks_document_id_is_current"
+
 
 class DocumentChunk(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "document_chunks"
     __table_args__ = (
-        UniqueConstraint(
+        Index(
+            CHUNK_CURRENT_UNIQUE_INDEX,
             "document_id",
             "chunk_index",
-            name="uq_document_chunks_document_id_chunk_index",
+            unique=True,
+            postgresql_where=text("is_current"),
+        ),
+        Index(
+            CHUNK_CURRENT_LOOKUP_INDEX,
+            "document_id",
+            "is_current",
         ),
         CheckConstraint(
             "chunk_index >= 0",
@@ -54,6 +68,12 @@ class DocumentChunk(UUIDPrimaryKeyMixin, Base):
         nullable=False,
         default=dict,
         server_default=text("'{}'::jsonb"),
+    )
+    is_current: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=true(),
     )
 
     document: Mapped[Document] = relationship(back_populates="chunks")

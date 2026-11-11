@@ -29,6 +29,7 @@ EXPECTED_TABLES = {
     "completion_reports",
     "documents",
     "document_chunks",
+    "document_chunk_embeddings",
     "workflow_runs",
 }
 
@@ -250,6 +251,52 @@ def test_expected_constraints_and_indexes_exist(
             == "users"
         )
 
+        embedding_columns = {
+            column["name"]
+            for column in inspector.get_columns("document_chunk_embeddings")
+        }
+        assert embedding_columns == {
+            "id",
+            "document_id",
+            "content",
+            "embedding",
+            "embedding_model",
+            "langchain_metadata",
+        }
+
+        chunk_columns = {
+            column["name"]
+            for column in inspector.get_columns("document_chunks")
+        }
+        assert "is_current" in chunk_columns
+
+        chunk_indexes = {
+            index["name"] for index in inspector.get_indexes("document_chunks")
+        }
+        assert {
+            "uq_document_chunks_document_id_chunk_index_current",
+            "ix_document_chunks_document_id_is_current",
+        } <= chunk_indexes
+
+        embedding_fks = {
+            fk["name"]: fk
+            for fk in inspector.get_foreign_keys("document_chunk_embeddings")
+        }
+        embedding_fk = embedding_fks[
+            "fk_document_chunk_embeddings_id_document_chunks"
+        ]
+        assert embedding_fk["referred_table"] == "document_chunks"
+        assert embedding_fk["options"].get("ondelete") == "CASCADE"
+
+        embedding_indexes = {
+            index["name"]
+            for index in inspector.get_indexes("document_chunk_embeddings")
+        }
+        assert {
+            "ix_document_chunk_embeddings_document_id",
+            "ix_document_chunk_embeddings_embedding_hnsw",
+        } <= embedding_indexes
+
 
 def test_downgrade_and_reupgrade(
     empty_migration_database: MigrationDatabase,
@@ -442,7 +489,7 @@ def test_clerk_identity_migration_downgrade_requires_password_hashes(
                 )
             ).scalar_one()
 
-    assert version == "0011_document_integrity"
+    assert version == "0013_staged_document_chunks"
     assert clerk_user_id == "user_clerk_test"
 
 
@@ -755,7 +802,7 @@ def test_complaint_history_downgrade_refuses_and_requires_archival(
                 )
             ).all()
 
-    assert version == "0011_document_integrity"
+    assert version == "0013_staged_document_chunks"
     assert count == 1
     assert archived[0].complaint_id == complaint_id
     assert archived[0].sequence_number == 1
@@ -1021,7 +1068,7 @@ def test_document_storage_migration_downgrade_refuses_storage_backed_rows(
                 )
             ).scalar_one()
 
-    assert version == "0011_document_integrity"
+    assert version == "0013_staged_document_chunks"
     assert storage_key == "aa/abcd.pdf"
 
     with _sync_engine(empty_migration_database) as engine:
@@ -1166,4 +1213,64 @@ def test_document_integrity_migration_checksum_format_and_recovery_column(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
 
-    assert version == "0011_document_integrity"
+    assert version == "0013_staged_document_chunks"
+
+def test_document_embeddings_migration_creates_pgvector_schema(
+    empty_migration_database: MigrationDatabase,
+) -> None:
+    command.upgrade(empty_migration_database.config, "head")
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            extension = connection.execute(
+                text(
+                    "SELECT extname FROM pg_extension WHERE extname = 'vector'"
+                )
+            ).scalar_one_or_none()
+            embedding_type = connection.execute(
+                text(
+                    "SELECT format_type(atttypid, atttypmod) "
+                    "FROM pg_attribute WHERE attrelid = "
+                    "'document_chunk_embeddings'::regclass "
+                    "AND attname = 'embedding'"
+                )
+            ).scalar_one()
+            index_definitions = {
+                row.indexname: row.indexdef
+                for row in connection.execute(
+                    text(
+                        "SELECT indexname, indexdef FROM pg_indexes "
+                        "WHERE tablename = 'document_chunk_embeddings'"
+                    )
+                )
+            }
+
+    assert extension == "vector"
+    assert embedding_type == "vector(1536)"
+    assert "USING hnsw" in index_definitions[
+        "ix_document_chunk_embeddings_embedding_hnsw"
+    ]
+    assert "vector_cosine_ops" in index_definitions[
+        "ix_document_chunk_embeddings_embedding_hnsw"
+    ]
+
+    command.downgrade(
+        empty_migration_database.config,
+        "0011_document_integrity",
+    )
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            table = connection.execute(
+                text("SELECT to_regclass('document_chunk_embeddings')")
+            ).scalar_one_or_none()
+            extension = connection.execute(
+                text(
+                    "SELECT extname FROM pg_extension WHERE extname = 'vector'"
+                )
+            ).scalar_one_or_none()
+
+    assert table is None
+    assert extension == "vector"
+
+    command.upgrade(empty_migration_database.config, "head")
