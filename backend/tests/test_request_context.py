@@ -94,15 +94,14 @@ def test_unhandled_exception_preserves_request_id_and_logs() -> None:
             "internal detail: postgresql://user:secret@db.example.com/internal"
         )
 
-    with capture_logs("app.request", "app.core.exceptions") as records:
-        with TestClient(
-            application,
-            raise_server_exceptions=False,
-        ) as client:
-            response = client.get(
-                "/_audit/boom",
-                headers={"X-Request-ID": "trace-500"},
-            )
+    with capture_logs("app.request", "app.core.exceptions") as records, TestClient(
+        application,
+        raise_server_exceptions=False,
+    ) as client:
+        response = client.get(
+            "/_audit/boom",
+            headers={"X-Request-ID": "trace-500"},
+        )
 
     assert response.status_code == 500
     assert response.headers["X-Request-ID"] == "trace-500"

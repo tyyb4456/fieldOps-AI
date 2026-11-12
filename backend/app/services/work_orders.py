@@ -6,7 +6,6 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.complaint import Complaint
 from app.models.enums import (
     AssignmentStatus,
     ComplaintStatus,
@@ -386,25 +385,27 @@ async def transition_work_order(
             technician.id,
         )
 
-    if target_status is WorkOrderStatus.PENDING_VERIFICATION:
-        if await _count_service_records(
+    if (
+        target_status is WorkOrderStatus.PENDING_VERIFICATION
+        and await _count_service_records(
             session,
             work_order.id,
             require_work_performed=False,
-        ) == 0:
-            raise InvalidWorkOrderTransitionError(
-                "A service record is required before verification"
-            )
+        )
+        == 0
+    ):
+        raise InvalidWorkOrderTransitionError(
+            "A service record is required before verification"
+        )
 
-    if target_status is WorkOrderStatus.COMPLETED:
-        if await _count_service_records(
-            session,
-            work_order.id,
-            require_work_performed=True,
-        ) == 0:
-            raise InvalidWorkOrderTransitionError(
-                "Completion evidence with work performed is required"
-            )
+    if target_status is WorkOrderStatus.COMPLETED and await _count_service_records(
+        session,
+        work_order.id,
+        require_work_performed=True,
+    ) == 0:
+        raise InvalidWorkOrderTransitionError(
+            "Completion evidence with work performed is required"
+        )
 
     if target_status in (
         WorkOrderStatus.AWAITING_ASSIGNMENT,

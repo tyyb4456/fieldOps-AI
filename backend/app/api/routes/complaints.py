@@ -15,7 +15,6 @@ from app.api.dependencies.auth import (
 from app.api.serializers import complaint_response
 from app.core.exceptions import AppError
 from app.db.session import get_db_session
-from app.models.complaint import Complaint
 from app.models.customer import Customer
 from app.models.enums import ComplaintChannel, ComplaintStatus
 from app.models.user import User

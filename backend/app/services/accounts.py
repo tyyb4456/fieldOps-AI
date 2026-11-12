@@ -3,9 +3,10 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, inspect as sa_inspect, select
+from sqlalchemy import func, select
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -48,13 +49,13 @@ class AccountNotFoundError(Exception):
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _user_load_options() -> tuple:
@@ -135,6 +136,7 @@ def _merge_profiles(
         email = normalize_email(token_profile.email)
         email_verified = token_profile.email_verified
 
+    phone: str | None
     if fetched.phone and fetched.phone_verified:
         phone = fetched.phone
         phone_verified = True
@@ -622,17 +624,20 @@ async def get_or_provision_user(
         return user
     except IntegrityError as exc:
         await session.rollback()
-        user = await _find_by_clerk_id(session, identity.clerk_user_id)
-        if user is None:
+        existing_user = await _find_by_clerk_id(
+            session,
+            identity.clerk_user_id,
+        )
+        if existing_user is None:
             raise AccountConflictError(
                 "The account could not be provisioned due to a "
                 "conflicting identity"
             ) from exc
-        await _sync_profile(session, user, identity)
-        await _maybe_enrich_profile(session, user, identity)
-        await ensure_profile_invariant(session, user)
+        await _sync_profile(session, existing_user, identity)
+        await _maybe_enrich_profile(session, existing_user, identity)
+        await ensure_profile_invariant(session, existing_user)
         await session.commit()
-        return user
+        return existing_user
     except Exception:
         await session.rollback()
         raise

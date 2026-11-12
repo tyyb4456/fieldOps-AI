@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import func, select
@@ -9,8 +9,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.customer import Customer
-from app.models.equipment import Equipment
 from app.models.enums import UserRole
+from app.models.equipment import Equipment
 from app.models.technician import Technician
 from app.models.user import User
 from app.services.accounts import (
@@ -53,7 +53,7 @@ def make_identity(
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def verified_profile(**overrides: object) -> ClerkProfile:
@@ -572,7 +572,6 @@ async def test_enrichment_failure_is_bounded_and_backed_off(
 
     async def unavailable(clerk_user_id: str) -> None:
         calls.append(clerk_user_id)
-        return None
 
     monkeypatch.setattr(
         "app.services.accounts.fetch_clerk_profile",

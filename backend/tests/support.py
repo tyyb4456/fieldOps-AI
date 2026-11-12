@@ -7,17 +7,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.complaint import Complaint
 from app.models.customer import Customer
-from app.models.equipment import Equipment
 from app.models.enums import (
     ComplaintChannel,
     ComplaintStatus,
     Priority,
     UserRole,
 )
+from app.models.equipment import Equipment
 from app.models.technician import Technician
 from app.models.user import User
 from tests.conftest import make_clerk_token
-
 
 _UNSET = object()
 

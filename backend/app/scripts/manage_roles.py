@@ -96,7 +96,7 @@ async def _run(args: argparse.Namespace) -> int:
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - CLI reports unexpected errors
         print(f"error: {exc}", file=sys.stderr)
         return 1
     finally:
@@ -136,7 +136,7 @@ async def _link_identity(args: argparse.Namespace) -> int:
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - CLI reports unexpected errors
         print(f"error: {exc}", file=sys.stderr)
         return 1
     finally:

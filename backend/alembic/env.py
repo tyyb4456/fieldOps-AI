@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import Connection, pool
 from sqlalchemy.ext.asyncio import create_async_engine
 
 import app.models  # noqa: F401
+from alembic import context
 from app.core.config import settings
 from app.db.base import Base
 

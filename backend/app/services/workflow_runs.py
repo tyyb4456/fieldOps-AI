@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -153,7 +153,7 @@ async def transition_workflow_run(
     workflow_run.status = target_status
 
     if target_status in TERMINAL_WORKFLOW_RUN_STATUSES:
-        workflow_run.finished_at = datetime.now(timezone.utc)
+        workflow_run.finished_at = datetime.now(UTC)
     else:
         workflow_run.finished_at = None
 

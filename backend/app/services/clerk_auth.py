@@ -267,7 +267,7 @@ async def fetch_clerk_profile(
     try:
         async with Clerk(bearer_auth=settings.clerk_secret_key) as clerk:
             user = await clerk.users.get_async(user_id=clerk_user_id)
-    except Exception:
+    except Exception:  # noqa: BLE001 - profile enrichment is best-effort
         logger.warning(
             "Unable to fetch Clerk profile for identity enrichment",
             extra={"clerk_user_id": clerk_user_id},

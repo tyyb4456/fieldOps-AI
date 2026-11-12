@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -16,7 +16,6 @@ from app.models.enums import (
 from app.models.service_record import ServiceRecord
 from app.models.technician_assignment import TechnicianAssignment
 from app.models.user import User
-from app.models.work_order import WorkOrder
 from app.schemas.completion_report import (
     CompletionReportCreate,
     CompletionReportUpdate,
@@ -294,6 +293,7 @@ async def _update_as_admin(
             )
 
     if "summary" in data.model_fields_set:
+        assert data.summary is not None
         report.summary = data.summary
 
     if "verification_notes" in data.model_fields_set:
@@ -302,7 +302,7 @@ async def _update_as_admin(
     if target_status is not None:
         report.evidence_status = target_status
         if target_status is EvidenceStatus.VERIFIED:
-            report.verified_at = datetime.now(timezone.utc)
+            report.verified_at = datetime.now(UTC)
         else:
             report.verified_at = None
 
@@ -355,6 +355,7 @@ async def _update_as_technician(
             "Only pending completion reports can be edited"
         )
 
+    assert data.summary is not None
     report.summary = data.summary
     await session.flush()
     return report

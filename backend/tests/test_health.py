@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from app.main import app
 from app.db.session import verify_database_connection
+from app.main import app
 
 
 def test_application_starts_and_health_returns_expected_response(

@@ -42,7 +42,7 @@ async def _seed_ready_complaint(
 ) -> tuple[object, object, str, object, str]:
     _, customer, customer_token = await seed_customer(session)
     equipment = await seed_equipment(session, customer)
-    complaint = await seed_complaint(
+    await seed_complaint(
         session,
         customer,
         equipment=equipment,

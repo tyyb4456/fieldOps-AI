@@ -3,12 +3,12 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
 from app.models.enums import IngestionStatus
 from app.services.storage import LocalFileStorage
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from tests.pdf_factory import build_pdf
 from tests.support import bearer, seed_admin
 

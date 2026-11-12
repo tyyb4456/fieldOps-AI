@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self
 
 import pytest
 from sqlalchemy import text
@@ -16,7 +16,7 @@ class _FakeConnection:
     async def execute(self, statement: object) -> None:
         return None
 
-    async def __aenter__(self) -> _FakeConnection:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *args: object) -> None:

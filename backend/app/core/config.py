@@ -32,6 +32,10 @@ DEFAULT_CHAT_MAX_RETRIES = 0
 DEFAULT_CHAT_MAX_OUTPUT_TOKENS = 1024
 DEFAULT_ANSWER_MIN_SIMILARITY = 0.3
 DEFAULT_ANSWER_MAX_CONTEXT_CHARS = 16000
+DEFAULT_DIAGNOSTIC_MAX_TOOL_CALLS = 8
+DEFAULT_DIAGNOSTIC_MAX_MODEL_CALLS = 6
+DEFAULT_DIAGNOSTIC_KNOWLEDGE_TOP_K = 5
+DEFAULT_DIAGNOSTIC_MAX_SERVICE_RECORDS = 10
 SUPPORTED_STORAGE_BACKENDS = frozenset({"local"})
 
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
@@ -159,6 +163,25 @@ class Settings(BaseSettings):
     answer_max_context_chars: int = Field(
         default=DEFAULT_ANSWER_MAX_CONTEXT_CHARS,
         ge=1,
+    )
+    diagnostic_max_tool_calls: int = Field(
+        default=DEFAULT_DIAGNOSTIC_MAX_TOOL_CALLS,
+        ge=1,
+        le=50,
+    )
+    diagnostic_max_model_calls: int = Field(
+        default=DEFAULT_DIAGNOSTIC_MAX_MODEL_CALLS,
+        ge=1,
+        le=30,
+    )
+    diagnostic_knowledge_top_k: int = Field(
+        default=DEFAULT_DIAGNOSTIC_KNOWLEDGE_TOP_K,
+        ge=1,
+    )
+    diagnostic_max_service_records: int = Field(
+        default=DEFAULT_DIAGNOSTIC_MAX_SERVICE_RECORDS,
+        ge=1,
+        le=50,
     )
 
     auth_bootstrap_rate_limit_per_ip: int = Field(default=30, ge=1)
@@ -346,6 +369,14 @@ class Settings(BaseSettings):
         if self.retrieval_default_top_k > self.retrieval_max_top_k:
             raise ValueError(
                 "RETRIEVAL_DEFAULT_TOP_K must not exceed RETRIEVAL_MAX_TOP_K"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_diagnostic_settings(self) -> Settings:
+        if self.diagnostic_knowledge_top_k > self.retrieval_max_top_k:
+            raise ValueError(
+                "DIAGNOSTIC_KNOWLEDGE_TOP_K must not exceed RETRIEVAL_MAX_TOP_K"
             )
         return self
 

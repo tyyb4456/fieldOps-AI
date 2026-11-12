@@ -6,10 +6,11 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 import pytest
-from alembic import command
 from sqlalchemy import Engine, create_engine, inspect, text
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import IntegrityError
+
+from alembic import command
 
 if TYPE_CHECKING:
     from tests.conftest import MigrationDatabase
@@ -327,37 +328,35 @@ def test_document_migration_preserves_existing_rows_and_changes_default(
 ) -> None:
     command.upgrade(empty_migration_database.config, "2dc9e9936fec")
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "INSERT INTO documents "
-                    "(manufacturer, model, document_name, version, "
-                    "file_path, is_active) "
-                    "VALUES ('Acme', 'INV-5000', 'Existing Manual', "
-                    "NULL, 'existing.pdf', TRUE)"
-                )
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO documents "
+                "(manufacturer, model, document_name, version, "
+                "file_path, is_active) "
+                "VALUES ('Acme', 'INV-5000', 'Existing Manual', "
+                "NULL, 'existing.pdf', TRUE)"
             )
+        )
 
     command.upgrade(empty_migration_database.config, "head")
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            existing = connection.execute(
-                text(
-                    "SELECT is_active, ingestion_status, file_path, "
-                    "storage_key FROM documents "
-                    "WHERE document_name = 'Existing Manual'"
-                )
-            ).one()
-            new_is_active = connection.execute(
-                text(
-                    "INSERT INTO documents "
-                    "(manufacturer, model, document_name, file_path) "
-                    "VALUES ('Acme', 'INV-5000', 'New Manual', 'new.pdf') "
-                    "RETURNING is_active"
-                )
-            ).scalar_one()
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        existing = connection.execute(
+            text(
+                "SELECT is_active, ingestion_status, file_path, "
+                "storage_key FROM documents "
+                "WHERE document_name = 'Existing Manual'"
+            )
+        ).one()
+        new_is_active = connection.execute(
+            text(
+                "INSERT INTO documents "
+                "(manufacturer, model, document_name, file_path) "
+                "VALUES ('Acme', 'INV-5000', 'New Manual', 'new.pdf') "
+                "RETURNING is_active"
+            )
+        ).scalar_one()
 
     assert existing.is_active is False
     assert existing.ingestion_status == "pending"
@@ -371,31 +370,29 @@ def test_document_migration_aborts_on_duplicate_null_versions(
 ) -> None:
     command.upgrade(empty_migration_database.config, "2dc9e9936fec")
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            for file_path in ("first.pdf", "second.pdf"):
-                connection.execute(
-                    text(
-                        "INSERT INTO documents "
-                        "(manufacturer, model, document_name, version, "
-                        "file_path, is_active) "
-                        "VALUES ('Acme', 'INV-5000', 'Duplicate Manual', "
-                        "NULL, :file_path, TRUE)"
-                    ),
-                    {"file_path": file_path},
-                )
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        for file_path in ("first.pdf", "second.pdf"):
+            connection.execute(
+                text(
+                    "INSERT INTO documents "
+                    "(manufacturer, model, document_name, version, "
+                    "file_path, is_active) "
+                    "VALUES ('Acme', 'INV-5000', 'Duplicate Manual', "
+                    "NULL, :file_path, TRUE)"
+                ),
+                {"file_path": file_path},
+            )
 
     with pytest.raises(RuntimeError, match="duplicate documents"):
         command.upgrade(empty_migration_database.config, "head")
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            version = connection.execute(
-                text("SELECT version_num FROM alembic_version")
-            ).scalar_one()
-            document_count = connection.execute(
-                text("SELECT count(*) FROM documents")
-            ).scalar_one()
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        version = connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one()
+        document_count = connection.execute(
+            text("SELECT count(*) FROM documents")
+        ).scalar_one()
 
     assert version == "2dc9e9936fec"
     assert document_count == 2
@@ -406,16 +403,15 @@ def test_clerk_identity_migration_preserves_existing_users(
 ) -> None:
     command.upgrade(empty_migration_database.config, "0002_document_integrity")
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "INSERT INTO users "
-                    "(full_name, email, password_hash, role) "
-                    "VALUES ('Existing User', 'existing@example.com', "
-                    "'legacy-hash', 'customer')"
-                )
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO users "
+                "(full_name, email, password_hash, role) "
+                "VALUES ('Existing User', 'existing@example.com', "
+                "'legacy-hash', 'customer')"
             )
+        )
 
     command.upgrade(empty_migration_database.config, "head")
 
@@ -461,16 +457,15 @@ def test_clerk_identity_migration_downgrade_requires_password_hashes(
 ) -> None:
     command.upgrade(empty_migration_database.config, "head")
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "INSERT INTO users "
-                    "(full_name, email, clerk_user_id, password_hash, role) "
-                    "VALUES ('Clerk User', 'clerk@example.com', "
-                    "'user_clerk_test', NULL, 'customer')"
-                )
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO users "
+                "(full_name, email, clerk_user_id, password_hash, role) "
+                "VALUES ('Clerk User', 'clerk@example.com', "
+                "'user_clerk_test', NULL, 'customer')"
             )
+        )
 
     with pytest.raises(RuntimeError, match="password_hash"):
         command.downgrade(
@@ -478,16 +473,15 @@ def test_clerk_identity_migration_downgrade_requires_password_hashes(
             "0002_document_integrity",
         )
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            version = connection.execute(
-                text("SELECT version_num FROM alembic_version")
-            ).scalar_one()
-            clerk_user_id = connection.execute(
-                text(
-                    "SELECT clerk_user_id FROM users WHERE email = 'clerk@example.com'"
-                )
-            ).scalar_one()
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        version = connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one()
+        clerk_user_id = connection.execute(
+            text(
+                "SELECT clerk_user_id FROM users WHERE email = 'clerk@example.com'"
+            )
+        ).scalar_one()
 
     assert version == "0013_staged_document_chunks"
     assert clerk_user_id == "user_clerk_test"
@@ -501,26 +495,24 @@ def test_email_normalization_migration_normalizes_existing_rows(
         "0003_clerk_identity",
     )
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "INSERT INTO users (full_name, email, role) VALUES "
-                    "('Mixed', '  Mixed@Example.COM  ', 'customer'), "
-                    "('Plain', 'plain@example.com', 'customer')"
-                )
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO users (full_name, email, role) VALUES "
+                "('Mixed', '  Mixed@Example.COM  ', 'customer'), "
+                "('Plain', 'plain@example.com', 'customer')"
             )
+        )
 
     command.upgrade(
         empty_migration_database.config,
         "0004_normalize_emails",
     )
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            rows = connection.execute(
-                text("SELECT full_name, email FROM users ORDER BY full_name")
-            ).all()
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        rows = connection.execute(
+            text("SELECT full_name, email FROM users ORDER BY full_name")
+        ).all()
 
     assert (rows[0].full_name, rows[0].email) == (
         "Mixed",
@@ -540,15 +532,14 @@ def test_email_normalization_migration_aborts_on_duplicates(
         "0003_clerk_identity",
     )
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "INSERT INTO users (full_name, email, role) VALUES "
-                    "('First', 'dup@example.com', 'customer'), "
-                    "('Second', 'Dup@Example.com', 'customer')"
-                )
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO users (full_name, email, role) VALUES "
+                "('First', 'dup@example.com', 'customer'), "
+                "('Second', 'Dup@Example.com', 'customer')"
             )
+        )
 
     with pytest.raises(RuntimeError, match="case-insensitive"):
         command.upgrade(
@@ -556,11 +547,10 @@ def test_email_normalization_migration_aborts_on_duplicates(
             "0004_normalize_emails",
         )
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            version = connection.execute(
-                text("SELECT version_num FROM alembic_version")
-            ).scalar_one()
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        version = connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one()
 
     assert version == "0003_clerk_identity"
 
@@ -573,40 +563,38 @@ def test_complaint_cancellation_migration_backfills_closed_status(
         "0005_profile_enrichment",
     )
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            user_id = connection.execute(
-                text(
-                    "INSERT INTO users (full_name, email, role) "
-                    "VALUES ('Legacy', 'legacy@example.com', 'customer') "
-                    "RETURNING id"
-                )
-            ).scalar_one()
-            customer_id = connection.execute(
-                text("INSERT INTO customers (user_id) VALUES (:user_id) RETURNING id"),
-                {"user_id": user_id},
-            ).scalar_one()
-            complaint_id = connection.execute(
-                text(
-                    "INSERT INTO complaints "
-                    "(customer_id, description, channel, status) "
-                    "VALUES (:customer_id, 'Legacy complaint', 'web', "
-                    "'closed') RETURNING id"
-                ),
-                {"customer_id": customer_id},
-            ).scalar_one()
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        user_id = connection.execute(
+            text(
+                "INSERT INTO users (full_name, email, role) "
+                "VALUES ('Legacy', 'legacy@example.com', 'customer') "
+                "RETURNING id"
+            )
+        ).scalar_one()
+        customer_id = connection.execute(
+            text("INSERT INTO customers (user_id) VALUES (:user_id) RETURNING id"),
+            {"user_id": user_id},
+        ).scalar_one()
+        complaint_id = connection.execute(
+            text(
+                "INSERT INTO complaints "
+                "(customer_id, description, channel, status) "
+                "VALUES (:customer_id, 'Legacy complaint', 'web', "
+                "'closed') RETURNING id"
+            ),
+            {"customer_id": customer_id},
+        ).scalar_one()
 
     command.upgrade(empty_migration_database.config, "head")
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            status = connection.execute(
-                text("SELECT status FROM complaints WHERE id = :id"),
-                {"id": complaint_id},
-            ).scalar_one()
-            history_count = connection.execute(
-                text("SELECT count(*) FROM complaint_history")
-            ).scalar_one()
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        status = connection.execute(
+            text("SELECT status FROM complaints WHERE id = :id"),
+            {"id": complaint_id},
+        ).scalar_one()
+        history_count = connection.execute(
+            text("SELECT count(*) FROM complaint_history")
+        ).scalar_one()
 
     assert status == "cancelled"
     assert history_count == 0
@@ -707,46 +695,44 @@ def test_complaint_history_sequence_migration_backfills_existing_rows(
         "0006_complaint_lifecycle",
     )
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            first_complaint = _insert_legacy_complaint(connection)
-            second_complaint = _insert_legacy_complaint(connection)
-            _insert_legacy_history(
-                connection,
-                first_complaint,
-                "updated",
-                "2026-01-02T00:00:00+00:00",
-            )
-            _insert_legacy_history(
-                connection,
-                first_complaint,
-                "created",
-                "2026-01-01T00:00:00+00:00",
-            )
-            _insert_legacy_history(
-                connection,
-                first_complaint,
-                "cancelled",
-                "2026-01-03T00:00:00+00:00",
-            )
-            _insert_legacy_history(
-                connection,
-                second_complaint,
-                "created",
-                "2026-02-01T00:00:00+00:00",
-            )
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        first_complaint = _insert_legacy_complaint(connection)
+        second_complaint = _insert_legacy_complaint(connection)
+        _insert_legacy_history(
+            connection,
+            first_complaint,
+            "updated",
+            "2026-01-02T00:00:00+00:00",
+        )
+        _insert_legacy_history(
+            connection,
+            first_complaint,
+            "created",
+            "2026-01-01T00:00:00+00:00",
+        )
+        _insert_legacy_history(
+            connection,
+            first_complaint,
+            "cancelled",
+            "2026-01-03T00:00:00+00:00",
+        )
+        _insert_legacy_history(
+            connection,
+            second_complaint,
+            "created",
+            "2026-02-01T00:00:00+00:00",
+        )
 
     command.upgrade(empty_migration_database.config, "head")
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            rows = connection.execute(
-                text(
-                    "SELECT complaint_id, event_type, sequence_number "
-                    "FROM complaint_history "
-                    "ORDER BY complaint_id, sequence_number"
-                )
-            ).all()
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT complaint_id, event_type, sequence_number "
+                "FROM complaint_history "
+                "ORDER BY complaint_id, sequence_number"
+            )
+        ).all()
 
     by_complaint: dict[object, list[tuple[str, int]]] = {}
     for row in rows:
@@ -767,18 +753,17 @@ def test_complaint_history_downgrade_refuses_and_requires_archival(
 ) -> None:
     command.upgrade(empty_migration_database.config, "head")
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            complaint_id = _insert_legacy_complaint(connection)
-            connection.execute(
-                text(
-                    "INSERT INTO complaint_history "
-                    "(complaint_id, sequence_number, event_type, "
-                    "changed_fields) "
-                    "VALUES (:complaint_id, 1, 'created', '{}'::jsonb)"
-                ),
-                {"complaint_id": complaint_id},
-            )
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        complaint_id = _insert_legacy_complaint(connection)
+        connection.execute(
+            text(
+                "INSERT INTO complaint_history "
+                "(complaint_id, sequence_number, event_type, "
+                "changed_fields) "
+                "VALUES (:complaint_id, 1, 'created', '{}'::jsonb)"
+            ),
+            {"complaint_id": complaint_id},
+        )
 
     with pytest.raises(RuntimeError, match="Refusing to downgrade"):
         command.downgrade(
@@ -786,21 +771,20 @@ def test_complaint_history_downgrade_refuses_and_requires_archival(
             "0005_profile_enrichment",
         )
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            version = connection.execute(
-                text("SELECT version_num FROM alembic_version")
-            ).scalar_one()
-            count = connection.execute(
-                text("SELECT count(*) FROM complaint_history")
-            ).scalar_one()
-            archived = connection.execute(
-                text(
-                    "SELECT complaint_id, sequence_number, event_type "
-                    "FROM complaint_history "
-                    "ORDER BY complaint_id, sequence_number"
-                )
-            ).all()
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        version = connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one()
+        count = connection.execute(
+            text("SELECT count(*) FROM complaint_history")
+        ).scalar_one()
+        archived = connection.execute(
+            text(
+                "SELECT complaint_id, sequence_number, event_type "
+                "FROM complaint_history "
+                "ORDER BY complaint_id, sequence_number"
+            )
+        ).all()
 
     assert version == "0013_staged_document_chunks"
     assert count == 1
@@ -809,9 +793,8 @@ def test_complaint_history_downgrade_refuses_and_requires_archival(
 
     # Documented archival procedure: the export above has been verified, so
     # the operator deliberately empties the audit table before retrying.
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            connection.execute(text("DELETE FROM complaint_history"))
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        connection.execute(text("DELETE FROM complaint_history"))
 
     command.downgrade(
         empty_migration_database.config,
@@ -884,80 +867,78 @@ def test_completion_report_link_migration_aborts_on_duplicate_reports(
         "0008_active_assignment_unique",
     )
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            user_id = connection.execute(
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        user_id = connection.execute(
+            text(
+                "INSERT INTO users (full_name, email, role) "
+                "VALUES ('Report Owner', :email, 'customer') "
+                "RETURNING id"
+            ),
+            {"email": f"report_{uuid.uuid4().hex}@example.com"},
+        ).scalar_one()
+        customer_id = connection.execute(
+            text("INSERT INTO customers (user_id) VALUES (:user_id) RETURNING id"),
+            {"user_id": user_id},
+        ).scalar_one()
+        equipment_id = connection.execute(
+            text(
+                "INSERT INTO equipment "
+                "(customer_id, manufacturer, model, serial_number, "
+                "equipment_type) VALUES (:customer_id, 'Acme', "
+                "'INV-5000', :serial, 'solar_inverter') RETURNING id"
+            ),
+            {
+                "customer_id": customer_id,
+                "serial": uuid.uuid4().hex[:12],
+            },
+        ).scalar_one()
+        complaint_id = connection.execute(
+            text(
+                "INSERT INTO complaints "
+                "(customer_id, equipment_id, description, channel, "
+                "status) VALUES (:customer_id, :equipment_id, "
+                "'Legacy complaint', 'web', 'received') RETURNING id"
+            ),
+            {
+                "customer_id": customer_id,
+                "equipment_id": equipment_id,
+            },
+        ).scalar_one()
+        work_order_id = connection.execute(
+            text(
+                "INSERT INTO work_orders "
+                "(complaint_id, equipment_id, title, description) "
+                "VALUES (:complaint_id, :equipment_id, 'Inspect', "
+                "'Legacy work order') RETURNING id"
+            ),
+            {
+                "complaint_id": complaint_id,
+                "equipment_id": equipment_id,
+            },
+        ).scalar_one()
+        for summary in ("First report", "Second report"):
+            connection.execute(
                 text(
-                    "INSERT INTO users (full_name, email, role) "
-                    "VALUES ('Report Owner', :email, 'customer') "
-                    "RETURNING id"
-                ),
-                {"email": f"report_{uuid.uuid4().hex}@example.com"},
-            ).scalar_one()
-            customer_id = connection.execute(
-                text("INSERT INTO customers (user_id) VALUES (:user_id) RETURNING id"),
-                {"user_id": user_id},
-            ).scalar_one()
-            equipment_id = connection.execute(
-                text(
-                    "INSERT INTO equipment "
-                    "(customer_id, manufacturer, model, serial_number, "
-                    "equipment_type) VALUES (:customer_id, 'Acme', "
-                    "'INV-5000', :serial, 'solar_inverter') RETURNING id"
+                    "INSERT INTO completion_reports "
+                    "(work_order_id, summary) "
+                    "VALUES (:work_order_id, :summary)"
                 ),
                 {
-                    "customer_id": customer_id,
-                    "serial": uuid.uuid4().hex[:12],
+                    "work_order_id": work_order_id,
+                    "summary": summary,
                 },
-            ).scalar_one()
-            complaint_id = connection.execute(
-                text(
-                    "INSERT INTO complaints "
-                    "(customer_id, equipment_id, description, channel, "
-                    "status) VALUES (:customer_id, :equipment_id, "
-                    "'Legacy complaint', 'web', 'received') RETURNING id"
-                ),
-                {
-                    "customer_id": customer_id,
-                    "equipment_id": equipment_id,
-                },
-            ).scalar_one()
-            work_order_id = connection.execute(
-                text(
-                    "INSERT INTO work_orders "
-                    "(complaint_id, equipment_id, title, description) "
-                    "VALUES (:complaint_id, :equipment_id, 'Inspect', "
-                    "'Legacy work order') RETURNING id"
-                ),
-                {
-                    "complaint_id": complaint_id,
-                    "equipment_id": equipment_id,
-                },
-            ).scalar_one()
-            for summary in ("First report", "Second report"):
-                connection.execute(
-                    text(
-                        "INSERT INTO completion_reports "
-                        "(work_order_id, summary) "
-                        "VALUES (:work_order_id, :summary)"
-                    ),
-                    {
-                        "work_order_id": work_order_id,
-                        "summary": summary,
-                    },
-                )
+            )
 
     with pytest.raises(RuntimeError, match="one completion report"):
         command.upgrade(empty_migration_database.config, "head")
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            version = connection.execute(
-                text("SELECT version_num FROM alembic_version")
-            ).scalar_one()
-            report_count = connection.execute(
-                text("SELECT count(*) FROM completion_reports")
-            ).scalar_one()
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        version = connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one()
+        report_count = connection.execute(
+            text("SELECT count(*) FROM completion_reports")
+        ).scalar_one()
 
     assert version == "0008_active_assignment_unique"
     assert report_count == 2
@@ -971,43 +952,41 @@ def test_document_storage_migration_backfills_legacy_rows(
         "0009_completion_report_link",
     )
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            document_id = connection.execute(
-                text(
-                    "INSERT INTO documents "
-                    "(manufacturer, model, document_name, version, "
-                    "file_path, is_active) "
-                    "VALUES ('Acme', 'INV-5000', 'Legacy Manual', '1.0', "
-                    "'legacy/INV-5000.pdf', TRUE) RETURNING id"
-                )
-            ).scalar_one()
-            connection.execute(
-                text(
-                    "INSERT INTO document_chunks "
-                    "(document_id, chunk_index, content) "
-                    "VALUES (:document_id, 0, 'Legacy chunk')"
-                ),
-                {"document_id": document_id},
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        document_id = connection.execute(
+            text(
+                "INSERT INTO documents "
+                "(manufacturer, model, document_name, version, "
+                "file_path, is_active) "
+                "VALUES ('Acme', 'INV-5000', 'Legacy Manual', '1.0', "
+                "'legacy/INV-5000.pdf', TRUE) RETURNING id"
             )
+        ).scalar_one()
+        connection.execute(
+            text(
+                "INSERT INTO document_chunks "
+                "(document_id, chunk_index, content) "
+                "VALUES (:document_id, 0, 'Legacy chunk')"
+            ),
+            {"document_id": document_id},
+        )
 
     command.upgrade(empty_migration_database.config, "head")
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            row = connection.execute(
-                text(
-                    "SELECT is_active, ingestion_status, file_path, "
-                    "storage_key, original_filename, content_type, "
-                    "byte_size, checksum_sha256, uploaded_by_id, "
-                    "ingested_at FROM documents WHERE id = :id"
-                ),
-                {"id": document_id},
-            ).one()
-            chunk_count = connection.execute(
-                text("SELECT count(*) FROM document_chunks WHERE document_id = :id"),
-                {"id": document_id},
-            ).scalar_one()
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        row = connection.execute(
+            text(
+                "SELECT is_active, ingestion_status, file_path, "
+                "storage_key, original_filename, content_type, "
+                "byte_size, checksum_sha256, uploaded_by_id, "
+                "ingested_at FROM documents WHERE id = :id"
+            ),
+            {"id": document_id},
+        ).one()
+        chunk_count = connection.execute(
+            text("SELECT count(*) FROM document_chunks WHERE document_id = :id"),
+            {"id": document_id},
+        ).scalar_one()
 
     assert row.is_active is False
     assert row.ingestion_status == "pending"
@@ -1021,13 +1000,11 @@ def test_document_storage_migration_backfills_legacy_rows(
     assert row.ingested_at is None
     assert chunk_count == 1
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            with pytest.raises(IntegrityError):
-                connection.execute(
-                    text("UPDATE documents SET is_active = TRUE WHERE id = :id"),
-                    {"id": document_id},
-                )
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection, pytest.raises(IntegrityError):
+        connection.execute(
+            text("UPDATE documents SET is_active = TRUE WHERE id = :id"),
+            {"id": document_id},
+        )
 
 
 def test_document_storage_migration_downgrade_refuses_storage_backed_rows(
@@ -1035,20 +1012,19 @@ def test_document_storage_migration_downgrade_refuses_storage_backed_rows(
 ) -> None:
     command.upgrade(empty_migration_database.config, "head")
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "INSERT INTO documents "
-                    "(manufacturer, model, document_name, storage_key, "
-                    "content_type, byte_size, checksum_sha256, "
-                    "ingestion_status) "
-                    "VALUES ('Acme', 'INV-5000', 'Stored Manual', "
-                    "'aa/abcd.pdf', 'application/pdf', 12, :checksum, "
-                    "'ready')"
-                ),
-                {"checksum": "a" * 64},
-            )
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO documents "
+                "(manufacturer, model, document_name, storage_key, "
+                "content_type, byte_size, checksum_sha256, "
+                "ingestion_status) "
+                "VALUES ('Acme', 'INV-5000', 'Stored Manual', "
+                "'aa/abcd.pdf', 'application/pdf', 12, :checksum, "
+                "'ready')"
+            ),
+            {"checksum": "a" * 64},
+        )
 
     with pytest.raises(RuntimeError, match="Refusing to downgrade"):
         command.downgrade(
@@ -1056,26 +1032,24 @@ def test_document_storage_migration_downgrade_refuses_storage_backed_rows(
             "0009_completion_report_link",
         )
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            version = connection.execute(
-                text("SELECT version_num FROM alembic_version")
-            ).scalar_one()
-            storage_key = connection.execute(
-                text(
-                    "SELECT storage_key FROM documents "
-                    "WHERE document_name = 'Stored Manual'"
-                )
-            ).scalar_one()
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        version = connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one()
+        storage_key = connection.execute(
+            text(
+                "SELECT storage_key FROM documents "
+                "WHERE document_name = 'Stored Manual'"
+            )
+        ).scalar_one()
 
     assert version == "0013_staged_document_chunks"
     assert storage_key == "aa/abcd.pdf"
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            connection.execute(
-                text("DELETE FROM documents WHERE document_name = 'Stored Manual'")
-            )
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        connection.execute(
+            text("DELETE FROM documents WHERE document_name = 'Stored Manual'")
+        )
 
     command.downgrade(
         empty_migration_database.config,
@@ -1111,31 +1085,29 @@ def test_document_integrity_migration_checksum_format_and_recovery_column(
         "0010_document_storage",
     )
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "INSERT INTO documents "
-                    "(manufacturer, model, document_name, checksum_sha256) "
-                    "VALUES ('Acme', 'INV-5000', 'Invalid Checksum', :value)"
-                ),
-                {"value": "A" * 64},
-            )
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO documents "
+                "(manufacturer, model, document_name, checksum_sha256) "
+                "VALUES ('Acme', 'INV-5000', 'Invalid Checksum', :value)"
+            ),
+            {"value": "A" * 64},
+        )
 
     with pytest.raises(RuntimeError, match="lowercase SHA-256"):
         command.upgrade(empty_migration_database.config, "head")
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            version = connection.execute(
-                text("SELECT version_num FROM alembic_version")
-            ).scalar_one()
-            connection.execute(
-                text(
-                    "UPDATE documents SET checksum_sha256 = NULL "
-                    "WHERE document_name = 'Invalid Checksum'"
-                )
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        version = connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one()
+        connection.execute(
+            text(
+                "UPDATE documents SET checksum_sha256 = NULL "
+                "WHERE document_name = 'Invalid Checksum'"
             )
+        )
 
     assert version == "0010_document_storage"
 
@@ -1151,29 +1123,26 @@ def test_document_integrity_migration_checksum_format_and_recovery_column(
     assert "ingestion_started_at" in columns
     assert "ck_documents_checksum_sha256_format" in checks
 
-    with pytest.raises(IntegrityError):
-        with _sync_engine(empty_migration_database) as engine:
-            with engine.begin() as connection:
-                connection.execute(
-                    text(
-                        "INSERT INTO documents "
-                        "(manufacturer, model, document_name, "
-                        "checksum_sha256) "
-                        "VALUES ('Acme', 'INV-5000', 'Uppercase', :value)"
-                    ),
-                    {"value": "B" * 64},
-                )
+    with pytest.raises(IntegrityError), _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO documents "
+                "(manufacturer, model, document_name, "
+                "checksum_sha256) "
+                "VALUES ('Acme', 'INV-5000', 'Uppercase', :value)"
+            ),
+            {"value": "B" * 64},
+        )
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "INSERT INTO documents "
-                    "(manufacturer, model, document_name, checksum_sha256) "
-                    "VALUES ('Acme', 'INV-5000', 'Valid', :value)"
-                ),
-                {"value": "b" * 64},
-            )
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO documents "
+                "(manufacturer, model, document_name, checksum_sha256) "
+                "VALUES ('Acme', 'INV-5000', 'Valid', :value)"
+            ),
+            {"value": "b" * 64},
+        )
 
     command.downgrade(
         empty_migration_database.config,
@@ -1191,27 +1160,25 @@ def test_document_integrity_migration_checksum_format_and_recovery_column(
     assert "ck_documents_checksum_sha256_format" not in checks
     assert "ck_documents_checksum_sha256_length" in checks
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "INSERT INTO documents "
-                    "(manufacturer, model, document_name, checksum_sha256) "
-                    "VALUES ('Acme', 'INV-5000', 'Uppercase Allowed', :value)"
-                ),
-                {"value": "C" * 64},
-            )
-            connection.execute(
-                text("DELETE FROM documents WHERE document_name = 'Uppercase Allowed'")
-            )
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO documents "
+                "(manufacturer, model, document_name, checksum_sha256) "
+                "VALUES ('Acme', 'INV-5000', 'Uppercase Allowed', :value)"
+            ),
+            {"value": "C" * 64},
+        )
+        connection.execute(
+            text("DELETE FROM documents WHERE document_name = 'Uppercase Allowed'")
+        )
 
     command.upgrade(empty_migration_database.config, "head")
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            version = connection.execute(
-                text("SELECT version_num FROM alembic_version")
-            ).scalar_one()
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        version = connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one()
 
     assert version == "0013_staged_document_chunks"
 
@@ -1220,30 +1187,29 @@ def test_document_embeddings_migration_creates_pgvector_schema(
 ) -> None:
     command.upgrade(empty_migration_database.config, "head")
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            extension = connection.execute(
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        extension = connection.execute(
+            text(
+                "SELECT extname FROM pg_extension WHERE extname = 'vector'"
+            )
+        ).scalar_one_or_none()
+        embedding_type = connection.execute(
+            text(
+                "SELECT format_type(atttypid, atttypmod) "
+                "FROM pg_attribute WHERE attrelid = "
+                "'document_chunk_embeddings'::regclass "
+                "AND attname = 'embedding'"
+            )
+        ).scalar_one()
+        index_definitions = {
+            row.indexname: row.indexdef
+            for row in connection.execute(
                 text(
-                    "SELECT extname FROM pg_extension WHERE extname = 'vector'"
+                    "SELECT indexname, indexdef FROM pg_indexes "
+                    "WHERE tablename = 'document_chunk_embeddings'"
                 )
-            ).scalar_one_or_none()
-            embedding_type = connection.execute(
-                text(
-                    "SELECT format_type(atttypid, atttypmod) "
-                    "FROM pg_attribute WHERE attrelid = "
-                    "'document_chunk_embeddings'::regclass "
-                    "AND attname = 'embedding'"
-                )
-            ).scalar_one()
-            index_definitions = {
-                row.indexname: row.indexdef
-                for row in connection.execute(
-                    text(
-                        "SELECT indexname, indexdef FROM pg_indexes "
-                        "WHERE tablename = 'document_chunk_embeddings'"
-                    )
-                )
-            }
+            )
+        }
 
     assert extension == "vector"
     assert embedding_type == "vector(1536)"
@@ -1259,16 +1225,15 @@ def test_document_embeddings_migration_creates_pgvector_schema(
         "0011_document_integrity",
     )
 
-    with _sync_engine(empty_migration_database) as engine:
-        with engine.begin() as connection:
-            table = connection.execute(
-                text("SELECT to_regclass('document_chunk_embeddings')")
-            ).scalar_one_or_none()
-            extension = connection.execute(
-                text(
-                    "SELECT extname FROM pg_extension WHERE extname = 'vector'"
-                )
-            ).scalar_one_or_none()
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        table = connection.execute(
+            text("SELECT to_regclass('document_chunk_embeddings')")
+        ).scalar_one_or_none()
+        extension = connection.execute(
+            text(
+                "SELECT extname FROM pg_extension WHERE extname = 'vector'"
+            )
+        ).scalar_one_or_none()
 
     assert table is None
     assert extension == "vector"

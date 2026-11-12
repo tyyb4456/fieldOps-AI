@@ -7,8 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.complaint import Complaint
 from app.models.customer import Customer
-from app.models.equipment import Equipment
 from app.models.enums import AssignmentStatus, WorkOrderStatus
+from app.models.equipment import Equipment
 from app.models.service_record import ServiceRecord
 from app.models.technician import Technician
 from app.models.technician_assignment import TechnicianAssignment

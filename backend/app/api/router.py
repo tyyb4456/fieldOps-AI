@@ -9,6 +9,7 @@ from app.api.routes import (
     complaints,
     completion_reports,
     customers,
+    diagnostics,
     documents,
     equipment,
     health,
@@ -33,4 +34,5 @@ api_router.include_router(service_records.router)
 api_router.include_router(completion_reports.router)
 api_router.include_router(documents.router)
 api_router.include_router(retrieval.router)
+api_router.include_router(diagnostics.router)
 api_router.include_router(workflow_runs.router)

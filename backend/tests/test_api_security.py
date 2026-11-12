@@ -14,7 +14,6 @@ from tests.support import (
     seed_technician,
 )
 
-
 CUSTOMER_ENDPOINTS = [
     ("get", "/api/v1/customers/me"),
     ("get", "/api/v1/customers/me/equipment"),

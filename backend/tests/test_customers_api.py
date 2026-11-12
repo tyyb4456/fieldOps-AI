@@ -23,7 +23,7 @@ async def test_customer_can_read_own_profile(
     api_client,
     migrated_db_session: AsyncSession,
 ) -> None:
-    user, customer, token = await seed_customer(
+    _user, customer, token = await seed_customer(
         migrated_db_session,
         full_name="Ahmed Khan",
         address="45 Solar Avenue",

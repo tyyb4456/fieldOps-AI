@@ -327,7 +327,7 @@ async def test_withdrawn_assignment_cannot_be_accepted_and_pool_reaccepts(
     assert status is WorkOrderStatus.AWAITING_ASSIGNMENT
     assert states[assignment_id] is AssignmentStatus.WITHDRAWN
 
-    new_user, new_technician, _ = await seed_technician(
+    _new_user, new_technician, _ = await seed_technician(
         migrated_db_session
     )
     replacement = await api_client.post(
@@ -453,7 +453,7 @@ async def test_returning_offered_escalated_work_order_withdraws_offer(
     assert status is WorkOrderStatus.AWAITING_ASSIGNMENT
     assert states[assignment_id] is AssignmentStatus.WITHDRAWN
 
-    new_user, new_technician, _ = await seed_technician(
+    _new_user, new_technician, _ = await seed_technician(
         migrated_db_session
     )
     replacement = await api_client.post(
@@ -816,7 +816,7 @@ async def test_unrelated_integrity_error_is_not_reported_as_conflict(
     migrated_db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    work_order_id, admin, admin_token = await _create_work_order(
+    work_order_id, admin, _admin_token = await _create_work_order(
         api_client,
         migrated_db_session,
     )

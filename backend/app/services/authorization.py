@@ -49,17 +49,17 @@ def require_admin(user: User) -> None:
 
 def scope_equipment_for_customer(
     customer_id: uuid.UUID,
-) -> Select[tuple[Equipment]]:
+) -> Select[Equipment]:
     return select(Equipment).where(Equipment.customer_id == customer_id)
 
 
 def scope_complaints_for_customer(
     customer_id: uuid.UUID,
-) -> Select[tuple[Complaint]]:
+) -> Select[Complaint]:
     return select(Complaint).where(Complaint.customer_id == customer_id)
 
 
-def scope_equipment_for_user(user: User) -> Select[tuple[Equipment]]:
+def scope_equipment_for_user(user: User) -> Select[Equipment]:
     if is_admin(user):
         return select(Equipment)
 
@@ -69,7 +69,7 @@ def scope_equipment_for_user(user: User) -> Select[tuple[Equipment]]:
     return select(Equipment).where(false())
 
 
-def scope_complaints_for_user(user: User) -> Select[tuple[Complaint]]:
+def scope_complaints_for_user(user: User) -> Select[Complaint]:
     if is_admin(user):
         return select(Complaint)
 
@@ -79,7 +79,7 @@ def scope_complaints_for_user(user: User) -> Select[tuple[Complaint]]:
     return select(Complaint).where(false())
 
 
-def scope_work_orders_for_user(user: User) -> Select[tuple[WorkOrder]]:
+def scope_work_orders_for_user(user: User) -> Select[WorkOrder]:
     statement = select(WorkOrder)
 
     if is_admin(user):
@@ -116,7 +116,7 @@ def scope_work_orders_for_user(user: User) -> Select[tuple[WorkOrder]]:
 
 def scope_assignments_for_user(
     user: User,
-) -> Select[tuple[TechnicianAssignment]]:
+) -> Select[TechnicianAssignment]:
     statement = select(TechnicianAssignment)
 
     if is_admin(user):
@@ -134,7 +134,7 @@ def scope_assignments_for_user(
 
 def scope_service_records_for_user(
     user: User,
-) -> Select[tuple[ServiceRecord]]:
+) -> Select[ServiceRecord]:
     statement = select(ServiceRecord)
 
     if is_admin(user):
@@ -168,7 +168,7 @@ def scope_service_records_for_user(
 
 def scope_completion_reports_for_user(
     user: User,
-) -> Select[tuple[CompletionReport]]:
+) -> Select[CompletionReport]:
     statement = select(CompletionReport)
 
     if is_admin(user):

@@ -4,9 +4,10 @@ import json
 from typing import Any
 
 import pytest
+from starlette.types import Message, Scope, Send
+
 from app.core.config import settings
 from app.core.middleware import RequestBodyLimitMiddleware
-from starlette.types import Message, Scope, Send
 
 
 class _Recorder:

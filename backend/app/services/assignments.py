@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -300,7 +300,7 @@ async def accept_assignment(
         )
 
     assignment.assignment_status = AssignmentStatus.ACCEPTED
-    assignment.accepted_at = datetime.now(timezone.utc)
+    assignment.accepted_at = datetime.now(UTC)
     work_order.status = WorkOrderStatus.ACCEPTED
     await session.flush()
     return assignment
@@ -356,7 +356,7 @@ async def reject_assignment(
         )
 
     assignment.assignment_status = AssignmentStatus.REJECTED
-    assignment.rejected_at = datetime.now(timezone.utc)
+    assignment.rejected_at = datetime.now(UTC)
     work_order.status = WorkOrderStatus.AWAITING_ASSIGNMENT
     await session.flush()
     return assignment

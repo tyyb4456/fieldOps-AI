@@ -15,7 +15,6 @@ from app.api.serializers import equipment_response
 from app.core.exceptions import AppError
 from app.db.session import get_db_session
 from app.models.customer import Customer
-from app.models.equipment import Equipment
 from app.models.user import User
 from app.schemas.equipment import (
     EquipmentCreate,

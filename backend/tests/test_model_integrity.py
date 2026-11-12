@@ -23,8 +23,8 @@ from app.models import (
     Technician,
     TechnicianAssignment,
     User,
-    WorkOrder,
     WorkflowRun,
+    WorkOrder,
 )
 from app.models.enums import (
     AssignmentStatus,

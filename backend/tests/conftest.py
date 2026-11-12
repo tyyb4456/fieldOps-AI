@@ -21,7 +21,6 @@ os.environ["LOG_LEVEL"] = "WARNING"
 import jwt
 import pytest
 import pytest_asyncio
-from alembic import command
 from alembic.config import Config
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -36,6 +35,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool
 
+from alembic import command
 from app.api.dependencies.storage import get_document_storage
 from app.api.dependencies.vector_index import get_vector_index
 from app.core.config import settings
@@ -174,7 +174,7 @@ def _temporary_database() -> Iterator[MigrationDatabase]:
         )
         with admin_engine.connect() as connection:
             connection.execute(text("SELECT 1"))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - any failure means skip tests
         pytest.skip(f"PostgreSQL test server is unavailable: {exc}")
 
     database_name = f"fieldops_test_{uuid.uuid4().hex[:12]}"
