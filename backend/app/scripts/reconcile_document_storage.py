@@ -13,13 +13,13 @@ from starlette.concurrency import run_in_threadpool
 from app.core.config import settings
 from app.db.session import async_session_factory, dispose_engine
 from app.models.document import Document
-from app.services.storage import (
+from app.services.documents.storage import (
     DocumentStorage,
     StorageError,
     StorageObjectInfo,
     build_document_storage,
 )
-from app.services.storage_coordination import (
+from app.services.documents.storage_coordination import (
     STORAGE_OPERATION_LOCK_KEY,
     advisory_lock,
 )

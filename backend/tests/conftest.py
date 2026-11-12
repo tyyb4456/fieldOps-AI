@@ -42,9 +42,9 @@ from app.core.config import settings
 from app.db.session import get_db_session
 from app.main import app
 from app.models.document_chunk import DocumentChunk
-from app.services.rate_limit import reset_rate_limiters
-from app.services.storage import LocalFileStorage
-from app.services.vector_index import VectorSearchHit
+from app.services.documents.storage import LocalFileStorage
+from app.services.rag.vector_index import VectorSearchHit
+from app.services.shared.rate_limit import reset_rate_limiters
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 

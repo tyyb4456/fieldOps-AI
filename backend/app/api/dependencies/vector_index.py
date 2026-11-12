@@ -7,12 +7,12 @@ from fastapi import Depends, status
 
 from app.core.exceptions import AppError
 from app.db.session import engine
-from app.services.embeddings import (
+from app.services.rag.embeddings import (
     EmbeddingConfigurationError,
     GoogleEmbeddingProvider,
     get_embedding_provider,
 )
-from app.services.vector_index import DatabaseVectorIndex, VectorIndex
+from app.services.rag.vector_index import DatabaseVectorIndex, VectorIndex
 
 logger = logging.getLogger(__name__)
 

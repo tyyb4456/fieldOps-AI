@@ -14,20 +14,20 @@ from app.models.customer import Customer
 from app.models.enums import UserRole
 from app.models.technician import Technician
 from app.models.user import User
-from app.services.accounts import (
+from app.services.accounts.accounts import (
     AccountConflictError,
     ProfileInvariantError,
     find_user_by_clerk_id,
     get_or_provision_user,
     validate_profile_invariant,
 )
-from app.services.clerk_auth import (
+from app.services.accounts.clerk_auth import (
     ClerkAuthenticationError,
     ClerkConfigurationError,
     ClerkIdentity,
     verify_clerk_token,
 )
-from app.services.rate_limit import (
+from app.services.shared.rate_limit import (
     RateLimitExceeded,
     enforce_bootstrap_subject_limit,
 )

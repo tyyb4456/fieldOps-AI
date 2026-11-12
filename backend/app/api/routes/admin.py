@@ -19,21 +19,21 @@ from app.core.exceptions import AppError
 from app.db.session import get_db_session
 from app.models.enums import ComplaintStatus
 from app.models.user import User
-from app.schemas.complaint import (
+from app.schemas.complaints.complaint import (
     ComplaintHistoryListResponse,
     ComplaintListResponse,
     ComplaintResponse,
 )
-from app.schemas.customer import CustomerProfileResponse
-from app.schemas.equipment import (
+from app.schemas.customers.customer import CustomerProfileResponse
+from app.schemas.equipment.equipment import (
     EquipmentCreate,
     EquipmentListResponse,
     EquipmentResponse,
     EquipmentUpdate,
 )
-from app.services import complaints as complaint_service
-from app.services import equipment as equipment_service
-from app.services.customers import get_customer_for_admin
+from app.services.complaints import complaints as complaint_service
+from app.services.customers.customers import get_customer_for_admin
+from app.services.equipment import equipment as equipment_service
 
 logger = logging.getLogger(__name__)
 

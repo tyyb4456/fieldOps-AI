@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from app.core.config import settings
-from app.services.chat_model import get_chat_model
-from app.services.knowledge_answer import KnowledgeAnswerService
+from app.services.agents.chat_model import get_chat_model
+from app.services.rag.knowledge_answer import KnowledgeAnswerService
 
 
 def get_knowledge_answer_service() -> KnowledgeAnswerService:

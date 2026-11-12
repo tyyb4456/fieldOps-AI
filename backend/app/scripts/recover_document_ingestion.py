@@ -7,11 +7,11 @@ import uuid
 
 from app.core.config import settings
 from app.db.session import async_session_factory, dispose_engine
-from app.services.authorization import AccessDeniedError
-from app.services.document_ingestion import (
+from app.services.documents.document_ingestion import (
     DocumentRecoveryError,
     recover_stale_processing_document,
 )
+from app.services.shared.authorization import AccessDeniedError
 
 logger = logging.getLogger(__name__)
 

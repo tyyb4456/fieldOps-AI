@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import Request, status
 
 from app.core.exceptions import AppError
-from app.services.rate_limit import (
+from app.services.shared.rate_limit import (
     RateLimitExceeded,
     enforce_bootstrap_ip_limit,
 )

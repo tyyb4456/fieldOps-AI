@@ -44,7 +44,7 @@ def error_payload(code: str, message: Any) -> dict[str, Any]:
 def register_exception_handlers(app: FastAPI) -> None:
     # Imported lazily so the core error layer does not import service modules
     # during application module initialization.
-    from app.services.authorization import AccessDeniedError
+    from app.services.shared.authorization import AccessDeniedError
 
     @app.exception_handler(AccessDeniedError)
     async def access_denied_error_handler(

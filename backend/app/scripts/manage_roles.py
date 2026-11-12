@@ -22,7 +22,7 @@ import uuid
 
 from app.db.session import async_session_factory, dispose_engine
 from app.models.enums import UserRole
-from app.services.accounts import (
+from app.services.accounts.accounts import (
     AccountConflictError,
     AccountNotFoundError,
     ProfileInvariantError,
@@ -31,7 +31,7 @@ from app.services.accounts import (
     link_clerk_identity,
     set_user_role,
 )
-from app.services.clerk_auth import fetch_clerk_profile
+from app.services.accounts.clerk_auth import fetch_clerk_profile
 
 
 def _build_parser() -> argparse.ArgumentParser:

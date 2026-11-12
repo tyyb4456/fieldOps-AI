@@ -2,24 +2,22 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.routes import (
-    admin,
-    assignments,
-    auth,
-    complaints,
+from app.api.routes import admin, health
+from app.api.routes.accounts import auth, users
+from app.api.routes.assignments import assignments
+from app.api.routes.complaints import complaints
+from app.api.routes.customers import customers
+from app.api.routes.diagnostics import diagnostics
+from app.api.routes.documents import documents
+from app.api.routes.equipment import equipment
+from app.api.routes.rag import retrieval
+from app.api.routes.work_orders import (
     completion_reports,
-    customers,
-    diagnostics,
-    documents,
-    equipment,
-    health,
-    retrieval,
     service_records,
-    users,
     work_order_proposals,
     work_orders,
-    workflow_runs,
 )
+from app.api.routes.workflow_runs import workflow_runs
 
 api_router = APIRouter()
 api_router.include_router(health.router)

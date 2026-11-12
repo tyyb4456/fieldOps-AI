@@ -14,31 +14,31 @@ from app.models.user import User
 from app.models.work_order import WorkOrder
 from app.models.work_order_proposal import WorkOrderProposal
 from app.models.workflow_run import WorkflowRun
-from app.schemas.assignment import (
+from app.schemas.accounts.user import UserMeResponse
+from app.schemas.assignments.assignment import (
     AssignmentResponse,
     TechnicianSummaryResponse,
 )
-from app.schemas.complaint import (
+from app.schemas.complaints.complaint import (
     ComplaintHistoryResponse,
     ComplaintResponse,
 )
-from app.schemas.completion_report import CompletionReportResponse
-from app.schemas.customer import CustomerProfileResponse
-from app.schemas.diagnostic import DiagnosticStatus
-from app.schemas.document import (
+from app.schemas.customers.customer import CustomerProfileResponse
+from app.schemas.diagnostics.diagnostic import DiagnosticStatus
+from app.schemas.documents.document import (
     DocumentChunkResponse,
     DocumentResponse,
 )
-from app.schemas.equipment import EquipmentResponse
-from app.schemas.knowledge_answer import CitationResponse
-from app.schemas.service_record import ServiceRecordResponse
-from app.schemas.user import UserMeResponse
-from app.schemas.work_order import WorkOrderResponse
-from app.schemas.work_order_proposal import (
+from app.schemas.equipment.equipment import EquipmentResponse
+from app.schemas.rag.knowledge_answer import CitationResponse
+from app.schemas.work_orders.completion_report import CompletionReportResponse
+from app.schemas.work_orders.service_record import ServiceRecordResponse
+from app.schemas.work_orders.work_order import WorkOrderResponse
+from app.schemas.work_orders.work_order_proposal import (
     TechnicianRecommendationResponse,
     WorkOrderProposalResponse,
 )
-from app.schemas.workflow_run import WorkflowRunResponse
+from app.schemas.workflow_runs.workflow_run import WorkflowRunResponse
 
 
 def user_me_response(user: User) -> UserMeResponse:

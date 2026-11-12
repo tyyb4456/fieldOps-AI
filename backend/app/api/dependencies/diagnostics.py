@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from app.core.config import settings
 from app.db.session import async_session_factory
-from app.services.chat_model import get_chat_model
-from app.services.diagnostics import DiagnosticService
+from app.services.agents.chat_model import get_chat_model
+from app.services.diagnostics.diagnostics import DiagnosticService
 
 
 def get_diagnostic_service() -> DiagnosticService:

@@ -4,9 +4,9 @@ from fastapi import Depends
 
 from app.api.dependencies.diagnostics import get_diagnostic_service
 from app.core.config import settings
-from app.services.chat_model import get_chat_model
-from app.services.diagnostics import DiagnosticService
-from app.services.work_order_proposals import WorkOrderProposalService
+from app.services.agents.chat_model import get_chat_model
+from app.services.diagnostics.diagnostics import DiagnosticService
+from app.services.work_orders.work_order_proposals import WorkOrderProposalService
 
 
 def get_work_order_proposal_service(
