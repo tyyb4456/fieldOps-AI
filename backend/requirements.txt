@@ -2,6 +2,7 @@ langchain
 langgraph
 deepagents
 langchain[google-genai]
+langchain-openai
 
 chromadb
 langchain-chroma

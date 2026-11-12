@@ -32,6 +32,14 @@ ENV_KEYS = (
     "EMBEDDING_DIMENSIONS",
     "RETRIEVAL_DEFAULT_TOP_K",
     "RETRIEVAL_MAX_TOP_K",
+    "OPENAI_API_KEY",
+    "CHAT_MODEL",
+    "CHAT_TEMPERATURE",
+    "CHAT_TIMEOUT_SECONDS",
+    "CHAT_MAX_RETRIES",
+    "CHAT_MAX_OUTPUT_TOKENS",
+    "ANSWER_MIN_SIMILARITY",
+    "ANSWER_MAX_CONTEXT_CHARS",
 )
 
 PRODUCTION_DATABASE_URL = (
@@ -50,6 +58,7 @@ def production_settings(**overrides: object) -> Settings:
         "clerk_secret_key": "sk_test_production_placeholder",
         "clerk_authorized_parties": "https://app.example.com",
         "google_api_key": "test-google-api-key",
+        "openai_api_key": "test-openai-api-key",
     }
     values.update(overrides)
     return Settings(**values)
@@ -81,6 +90,14 @@ def test_default_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.embedding_dimensions == 1536
     assert settings.retrieval_default_top_k == 5
     assert settings.retrieval_max_top_k == 20
+    assert settings.openai_api_key is None
+    assert settings.chat_model == "gpt-4o-mini"
+    assert settings.chat_temperature == 0.0
+    assert settings.chat_timeout_seconds == 30.0
+    assert settings.chat_max_retries == 0
+    assert settings.chat_max_output_tokens == 1024
+    assert settings.answer_min_similarity == 0.3
+    assert settings.answer_max_context_chars == 16000
 
 
 @pytest.mark.parametrize(
@@ -382,3 +399,33 @@ def test_retrieval_top_k_settings_are_bounded() -> None:
 def test_production_requires_google_api_key() -> None:
     with pytest.raises(ValidationError):
         production_settings(google_api_key=None)
+
+
+def test_openai_api_key_is_trimmed_and_blank_is_none() -> None:
+    settings = Settings(_env_file=None, openai_api_key="  test-key  ")
+
+    assert settings.openai_api_key == "test-key"
+    assert Settings(_env_file=None, openai_api_key="   ").openai_api_key is None
+
+
+def test_chat_model_must_not_be_blank() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, chat_model="   ")
+
+
+def test_chat_generation_settings_are_bounded() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, chat_temperature=2.5)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, chat_timeout_seconds=0)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, chat_max_retries=-1)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, answer_min_similarity=1.5)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, answer_max_context_chars=0)
+
+
+def test_production_requires_openai_api_key() -> None:
+    with pytest.raises(ValidationError):
+        production_settings(openai_api_key=None)

@@ -25,6 +25,13 @@ DEFAULT_EMBEDDING_MODEL = "gemini-embedding-001"
 DEFAULT_EMBEDDING_DIMENSIONS = 1536
 DEFAULT_RETRIEVAL_TOP_K = 5
 DEFAULT_RETRIEVAL_MAX_TOP_K = 20
+DEFAULT_CHAT_MODEL = "gpt-4o-mini"
+DEFAULT_CHAT_TEMPERATURE = 0.0
+DEFAULT_CHAT_TIMEOUT_SECONDS = 30.0
+DEFAULT_CHAT_MAX_RETRIES = 0
+DEFAULT_CHAT_MAX_OUTPUT_TOKENS = 1024
+DEFAULT_ANSWER_MIN_SIMILARITY = 0.3
+DEFAULT_ANSWER_MAX_CONTEXT_CHARS = 16000
 SUPPORTED_STORAGE_BACKENDS = frozenset({"local"})
 
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
@@ -126,6 +133,32 @@ class Settings(BaseSettings):
         default=DEFAULT_RETRIEVAL_MAX_TOP_K,
         ge=1,
         le=100,
+    )
+
+    openai_api_key: str | None = None
+    chat_model: str = DEFAULT_CHAT_MODEL
+    chat_temperature: float = Field(
+        default=DEFAULT_CHAT_TEMPERATURE,
+        ge=0.0,
+        le=2.0,
+    )
+    chat_timeout_seconds: float = Field(
+        default=DEFAULT_CHAT_TIMEOUT_SECONDS,
+        gt=0,
+    )
+    chat_max_retries: int = Field(default=DEFAULT_CHAT_MAX_RETRIES, ge=0)
+    chat_max_output_tokens: int = Field(
+        default=DEFAULT_CHAT_MAX_OUTPUT_TOKENS,
+        ge=1,
+    )
+    answer_min_similarity: float = Field(
+        default=DEFAULT_ANSWER_MIN_SIMILARITY,
+        ge=0.0,
+        le=1.0,
+    )
+    answer_max_context_chars: int = Field(
+        default=DEFAULT_ANSWER_MAX_CONTEXT_CHARS,
+        ge=1,
     )
 
     auth_bootstrap_rate_limit_per_ip: int = Field(default=30, ge=1)
@@ -283,6 +316,24 @@ class Settings(BaseSettings):
             raise ValueError("EMBEDDING_MODEL must not be blank")
         return model
 
+    @field_validator("openai_api_key", mode="before")
+    @classmethod
+    def normalize_openai_api_key(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator("chat_model")
+    @classmethod
+    def validate_chat_model(cls, value: str) -> str:
+        model = value.strip()
+        if not model:
+            raise ValueError("CHAT_MODEL must not be blank")
+        return model
+
     @model_validator(mode="after")
     def validate_embedding_settings(self) -> Settings:
         if self.embedding_dimensions != DEFAULT_EMBEDDING_DIMENSIONS:
@@ -358,6 +409,12 @@ class Settings(BaseSettings):
             raise ValueError(
                 "GOOGLE_API_KEY must be configured in production for "
                 "document embeddings"
+            )
+
+        if not self.openai_api_key:
+            raise ValueError(
+                "OPENAI_API_KEY must be configured in production for "
+                "grounded answer generation"
             )
 
         if self.db_echo:

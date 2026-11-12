@@ -4,7 +4,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.document import Document
@@ -41,7 +41,19 @@ async def authorized_document_ids(
     *,
     manufacturer: str | None = None,
     model: str | None = None,
+    embedding_model: str | None = None,
 ) -> list[uuid.UUID]:
+    """Return active, ready document IDs eligible for retrieval.
+
+    When ``embedding_model`` is supplied, documents known to have been indexed
+    with a different embedding model are excluded. This keeps one stale
+    document from disabling retrieval for the rest of the knowledge base, while
+    ``VectorIndex.validate_embedding_models`` remains the defense-in-depth
+    check at the vector-search boundary. Documents with an unknown (``NULL``)
+    model remain eligible for backwards compatibility; the vector store still
+    filters their vectors by the configured model.
+    """
+
     statement = select(Document.id).where(
         Document.is_active.is_(True),
         Document.ingestion_status == IngestionStatus.READY,
@@ -52,6 +64,13 @@ async def authorized_document_ids(
         )
     if model:
         statement = statement.where(func.lower(Document.model) == model.lower())
+    if embedding_model:
+        statement = statement.where(
+            or_(
+                Document.embedding_model.is_(None),
+                Document.embedding_model == embedding_model,
+            )
+        )
 
     result = await session.execute(statement)
     return list(result.scalars().all())
@@ -98,6 +117,7 @@ async def search_documents(
         session,
         manufacturer=manufacturer.strip() if manufacturer else None,
         model=model.strip() if model else None,
+        embedding_model=vector_index.embedding_model,
     )
     if not permitted_document_ids:
         return []

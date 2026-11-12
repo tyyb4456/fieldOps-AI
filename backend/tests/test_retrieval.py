@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
 from app.models.enums import IngestionStatus
+from app.services.retrieval import documents_requiring_reembedding
 from app.services.vector_index import VectorIndexError, VectorSearchHit
 from tests.support import bearer, seed_admin, seed_customer, seed_technician
 
@@ -19,6 +20,7 @@ async def _seed_document(
     model: str = "INV-5000",
     is_active: bool = True,
     ingestion_status: IngestionStatus = IngestionStatus.READY,
+    embedding_model: str | None = None,
     chunks: tuple[str, ...] = ("Error E-05 requires inspection.",),
 ) -> tuple[Document, list[DocumentChunk]]:
     document = Document(
@@ -28,6 +30,7 @@ async def _seed_document(
         version="1.0",
         ingestion_status=ingestion_status,
         is_active=is_active,
+        embedding_model=embedding_model,
     )
     session.add(document)
     await session.flush()
@@ -210,3 +213,86 @@ async def test_search_validates_query_and_top_k(
 
     assert blank.status_code == 422
     assert too_many.status_code == 422
+
+
+async def test_search_excludes_documents_with_incompatible_embedding_model(
+    api_client: Any,
+    migrated_db_session: AsyncSession,
+    vector_index: Any,
+) -> None:
+    _, admin_token = await seed_admin(migrated_db_session)
+    valid, valid_chunks = await _seed_document(
+        migrated_db_session,
+        embedding_model="gemini-embedding-001",
+    )
+    stale, stale_chunks = await _seed_document(
+        migrated_db_session,
+        embedding_model="gemini-embedding-old",
+    )
+
+    vector_index.search_hits = [
+        VectorSearchHit(chunk_id=stale_chunks[0].id, distance=0.01),
+        VectorSearchHit(chunk_id=valid_chunks[0].id, distance=0.4),
+    ]
+
+    response = await api_client.post(
+        "/api/v1/knowledge/search",
+        headers=bearer(admin_token),
+        json={"query": "error code"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [item["chunk_id"] for item in body["items"]] == [
+        str(valid_chunks[0].id)
+    ]
+    assert vector_index.search_calls == [("error code", [valid.id], 5)]
+    assert stale.id not in vector_index.search_calls[0][1]
+
+
+async def test_search_keeps_unknown_embedding_model_documents_eligible(
+    api_client: Any,
+    migrated_db_session: AsyncSession,
+    vector_index: Any,
+) -> None:
+    _, admin_token = await seed_admin(migrated_db_session)
+    legacy, legacy_chunks = await _seed_document(
+        migrated_db_session,
+        embedding_model=None,
+    )
+    vector_index.search_hits = [
+        VectorSearchHit(chunk_id=legacy_chunks[0].id, distance=0.2),
+    ]
+
+    response = await api_client.post(
+        "/api/v1/knowledge/search",
+        headers=bearer(admin_token),
+        json={"query": "error code"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert [item["chunk_id"] for item in response.json()["items"]] == [
+        str(legacy_chunks[0].id)
+    ]
+    assert legacy.id in vector_index.search_calls[0][1]
+
+
+async def test_documents_requiring_reembedding_lists_stale_documents(
+    migrated_db_session: AsyncSession,
+) -> None:
+    current, _ = await _seed_document(
+        migrated_db_session,
+        embedding_model="gemini-embedding-001",
+    )
+    stale, _ = await _seed_document(
+        migrated_db_session,
+        embedding_model="gemini-embedding-old",
+    )
+
+    stale_ids = await documents_requiring_reembedding(
+        migrated_db_session,
+        expected_model="gemini-embedding-001",
+    )
+
+    assert stale.id in stale_ids
+    assert current.id not in stale_ids
