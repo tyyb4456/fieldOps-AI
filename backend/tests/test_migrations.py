@@ -25,6 +25,7 @@ EXPECTED_TABLES = {
     "conversations",
     "messages",
     "work_orders",
+    "work_order_proposals",
     "technician_assignments",
     "service_records",
     "completion_reports",
@@ -95,6 +96,27 @@ def test_expected_constraints_and_indexes_exist(
             "ck_work_orders_work_order_priority",
             "ck_work_orders_work_order_status",
         } <= work_order_checks
+
+        proposal_checks = {
+            check["name"]
+            for check in inspector.get_check_constraints("work_order_proposals")
+        }
+        assert {
+            "ck_work_order_proposals_estimated_duration_non_negative",
+            "ck_work_order_proposals_work_order_priority",
+            "ck_work_order_proposals_work_order_proposal_status",
+        } <= proposal_checks
+
+        proposal_indexes = {
+            index["name"]
+            for index in inspector.get_indexes("work_order_proposals")
+        }
+        assert {
+            "uq_work_order_proposals_pending_complaint",
+            "ix_work_order_proposals_complaint_id",
+            "ix_work_order_proposals_status",
+        } <= proposal_indexes
+
 
         complaint_fks = {
             fk["name"]: fk for fk in inspector.get_foreign_keys("complaints")
@@ -483,7 +505,7 @@ def test_clerk_identity_migration_downgrade_requires_password_hashes(
             )
         ).scalar_one()
 
-    assert version == "0013_staged_document_chunks"
+    assert version == "0014_work_order_proposals"
     assert clerk_user_id == "user_clerk_test"
 
 
@@ -786,7 +808,7 @@ def test_complaint_history_downgrade_refuses_and_requires_archival(
             )
         ).all()
 
-    assert version == "0013_staged_document_chunks"
+    assert version == "0014_work_order_proposals"
     assert count == 1
     assert archived[0].complaint_id == complaint_id
     assert archived[0].sequence_number == 1
@@ -1043,7 +1065,7 @@ def test_document_storage_migration_downgrade_refuses_storage_backed_rows(
             )
         ).scalar_one()
 
-    assert version == "0013_staged_document_chunks"
+    assert version == "0014_work_order_proposals"
     assert storage_key == "aa/abcd.pdf"
 
     with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
@@ -1180,7 +1202,7 @@ def test_document_integrity_migration_checksum_format_and_recovery_column(
             text("SELECT version_num FROM alembic_version")
         ).scalar_one()
 
-    assert version == "0013_staged_document_chunks"
+    assert version == "0014_work_order_proposals"
 
 def test_document_embeddings_migration_creates_pgvector_schema(
     empty_migration_database: MigrationDatabase,

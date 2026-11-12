@@ -16,6 +16,7 @@ from app.api.routes import (
     retrieval,
     service_records,
     users,
+    work_order_proposals,
     work_orders,
     workflow_runs,
 )
@@ -29,6 +30,7 @@ api_router.include_router(equipment.router)
 api_router.include_router(complaints.router)
 api_router.include_router(admin.router)
 api_router.include_router(work_orders.router)
+api_router.include_router(work_order_proposals.router)
 api_router.include_router(assignments.router)
 api_router.include_router(service_records.router)
 api_router.include_router(completion_reports.router)

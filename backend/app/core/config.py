@@ -36,6 +36,9 @@ DEFAULT_DIAGNOSTIC_MAX_TOOL_CALLS = 8
 DEFAULT_DIAGNOSTIC_MAX_MODEL_CALLS = 6
 DEFAULT_DIAGNOSTIC_KNOWLEDGE_TOP_K = 5
 DEFAULT_DIAGNOSTIC_MAX_SERVICE_RECORDS = 10
+DEFAULT_WORK_ORDER_PROPOSAL_MAX_TOOL_CALLS = 6
+DEFAULT_WORK_ORDER_PROPOSAL_MAX_MODEL_CALLS = 6
+DEFAULT_WORK_ORDER_PROPOSAL_MAX_TECHNICIANS = 10
 SUPPORTED_STORAGE_BACKENDS = frozenset({"local"})
 
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
@@ -182,6 +185,21 @@ class Settings(BaseSettings):
         default=DEFAULT_DIAGNOSTIC_MAX_SERVICE_RECORDS,
         ge=1,
         le=50,
+    )
+    work_order_proposal_max_tool_calls: int = Field(
+        default=DEFAULT_WORK_ORDER_PROPOSAL_MAX_TOOL_CALLS,
+        ge=1,
+        le=50,
+    )
+    work_order_proposal_max_model_calls: int = Field(
+        default=DEFAULT_WORK_ORDER_PROPOSAL_MAX_MODEL_CALLS,
+        ge=1,
+        le=30,
+    )
+    work_order_proposal_max_technicians: int = Field(
+        default=DEFAULT_WORK_ORDER_PROPOSAL_MAX_TECHNICIANS,
+        ge=1,
+        le=100,
     )
 
     auth_bootstrap_rate_limit_per_ip: int = Field(default=30, ge=1)

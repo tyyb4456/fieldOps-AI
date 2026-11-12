@@ -80,6 +80,12 @@ class WorkflowRunStatus(str, PyEnum):
     FAILED = "failed"
 
 
+class WorkOrderProposalStatus(str, PyEnum):
+    PENDING_APPROVAL = "pending_approval"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
 class IngestionStatus(str, PyEnum):
     PENDING = "pending"
     PROCESSING = "processing"
@@ -113,6 +119,7 @@ __all__ = [
     "MessageSenderType",
     "Priority",
     "UserRole",
+    "WorkOrderProposalStatus",
     "WorkOrderStatus",
     "WorkflowRunStatus",
     "enum_type",

@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from app.models.customer import Customer
     from app.models.equipment import Equipment
     from app.models.work_order import WorkOrder
+    from app.models.work_order_proposal import WorkOrderProposal
     from app.models.workflow_run import WorkflowRun
 
 
@@ -106,6 +107,10 @@ class Complaint(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
         passive_deletes="all",
     )
     workflow_runs: Mapped[list[WorkflowRun]] = relationship(
+        back_populates="complaint",
+        passive_deletes="all",
+    )
+    work_order_proposals: Mapped[list[WorkOrderProposal]] = relationship(
         back_populates="complaint",
         passive_deletes="all",
     )

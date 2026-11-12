@@ -15,6 +15,7 @@ from app.models.technician import Technician
 from app.models.technician_assignment import TechnicianAssignment
 from app.models.user import User
 from app.models.work_order import WorkOrder
+from app.models.work_order_proposal import WorkOrderProposal
 from app.models.workflow_run import WorkflowRun
 
 __all__ = [
@@ -33,5 +34,6 @@ __all__ = [
     "TechnicianAssignment",
     "User",
     "WorkOrder",
+    "WorkOrderProposal",
     "WorkflowRun",
 ]

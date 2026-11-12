@@ -25,6 +25,7 @@ from app.models import (
     User,
     WorkflowRun,
     WorkOrder,
+    WorkOrderProposal,
 )
 
 EXPECTED_TABLES = {
@@ -37,6 +38,7 @@ EXPECTED_TABLES = {
     "conversations",
     "messages",
     "work_orders",
+    "work_order_proposals",
     "technician_assignments",
     "service_records",
     "completion_reports",
@@ -56,6 +58,7 @@ EXPECTED_MODELS = {
     "Conversation": Conversation,
     "Message": Message,
     "WorkOrder": WorkOrder,
+    "WorkOrderProposal": WorkOrderProposal,
     "TechnicianAssignment": TechnicianAssignment,
     "ServiceRecord": ServiceRecord,
     "CompletionReport": CompletionReport,
@@ -80,6 +83,7 @@ EXPECTED_RELATIONSHIPS = {
         "equipment",
         "conversations",
         "work_order",
+        "work_order_proposals",
         "workflow_runs",
         "history",
     },
@@ -93,6 +97,14 @@ EXPECTED_RELATIONSHIPS = {
         "service_records",
         "completion_reports",
     },
+    WorkOrderProposal: {
+        "complaint",
+        "selected_technician",
+        "created_by",
+        "reviewed_by",
+        "resulting_work_order",
+        "resulting_assignment",
+    },
     TechnicianAssignment: {"work_order", "technician"},
     ServiceRecord: {"equipment", "work_order", "technician"},
     CompletionReport: {"work_order", "service_record"},
@@ -103,12 +115,12 @@ EXPECTED_RELATIONSHIPS = {
 }
 
 
-def test_all_sixteen_models_are_registered() -> None:
+def test_all_seventeen_models_are_registered() -> None:
     configure_mappers()
 
     table_names = set(Base.metadata.tables)
     assert table_names == EXPECTED_TABLES
-    assert len(table_names) == 16
+    assert len(table_names) == 17
 
     for name, model in EXPECTED_MODELS.items():
         assert model.__name__ == name
@@ -145,6 +157,7 @@ RESTRICT_RELATIONSHIPS = {
     Complaint: {
         "conversations",
         "work_order",
+        "work_order_proposals",
         "workflow_runs",
         "history",
     },

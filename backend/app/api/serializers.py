@@ -12,6 +12,7 @@ from app.models.technician import Technician
 from app.models.technician_assignment import TechnicianAssignment
 from app.models.user import User
 from app.models.work_order import WorkOrder
+from app.models.work_order_proposal import WorkOrderProposal
 from app.models.workflow_run import WorkflowRun
 from app.schemas.assignment import (
     AssignmentResponse,
@@ -23,14 +24,20 @@ from app.schemas.complaint import (
 )
 from app.schemas.completion_report import CompletionReportResponse
 from app.schemas.customer import CustomerProfileResponse
+from app.schemas.diagnostic import DiagnosticStatus
 from app.schemas.document import (
     DocumentChunkResponse,
     DocumentResponse,
 )
 from app.schemas.equipment import EquipmentResponse
+from app.schemas.knowledge_answer import CitationResponse
 from app.schemas.service_record import ServiceRecordResponse
 from app.schemas.user import UserMeResponse
 from app.schemas.work_order import WorkOrderResponse
+from app.schemas.work_order_proposal import (
+    TechnicianRecommendationResponse,
+    WorkOrderProposalResponse,
+)
 from app.schemas.workflow_run import WorkflowRunResponse
 
 
@@ -230,4 +237,58 @@ def workflow_run_response(
         started_at=workflow_run.started_at,
         finished_at=workflow_run.finished_at,
         error_message=workflow_run.error_message,
+    )
+
+
+def work_order_proposal_response(
+    proposal: WorkOrderProposal,
+) -> WorkOrderProposalResponse:
+    recommendations = [
+        TechnicianRecommendationResponse.model_validate(item)
+        for item in proposal.technician_recommendations
+        if isinstance(item, dict)
+    ]
+    citations = [
+        CitationResponse.model_validate(item)
+        for item in proposal.citations
+        if isinstance(item, dict)
+    ]
+    return WorkOrderProposalResponse(
+        id=proposal.id,
+        complaint_id=proposal.complaint_id,
+        status=proposal.status,
+        title=proposal.title,
+        problem_description=proposal.problem_description,
+        proposed_scope=proposal.proposed_scope,
+        technical_findings=proposal.technical_findings,
+        recommended_actions=[
+            str(item) for item in proposal.recommended_actions
+        ],
+        required_skills=[str(item) for item in proposal.required_skills],
+        required_parts=[str(item) for item in proposal.required_parts],
+        priority=proposal.priority,
+        estimated_duration_minutes=proposal.estimated_duration_minutes,
+        safety_warnings=[str(item) for item in proposal.safety_warnings],
+        missing_information=[
+            str(item) for item in proposal.missing_information
+        ],
+        generation_warnings=[
+            str(item) for item in proposal.generation_warnings
+        ],
+        diagnostic_status=DiagnosticStatus(proposal.diagnostic_status),
+        diagnostic_summary=proposal.diagnostic_summary,
+        diagnostic_snapshot=proposal.diagnostic_snapshot,
+        citations=citations,
+        requires_escalation=proposal.requires_escalation,
+        escalation_reason=proposal.escalation_reason,
+        technician_recommendations=recommendations,
+        selected_technician_id=proposal.selected_technician_id,
+        created_by_id=proposal.created_by_id,
+        reviewed_by_id=proposal.reviewed_by_id,
+        reviewed_at=proposal.reviewed_at,
+        rejection_reason=proposal.rejection_reason,
+        resulting_work_order_id=proposal.resulting_work_order_id,
+        resulting_assignment_id=proposal.resulting_assignment_id,
+        created_at=proposal.created_at,
+        updated_at=proposal.updated_at,
     )
