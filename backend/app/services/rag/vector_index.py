@@ -20,6 +20,7 @@ from app.models.document_chunk_embedding import (
     VECTOR_TABLE_NAME,
 )
 from app.services.rag.embeddings import EmbeddingError
+from app.services.shared.retry import TransientError, is_transient_error
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,10 @@ class VectorIndexError(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
+
+
+class TransientVectorIndexError(VectorIndexError, TransientError):
+    """Retryable vector index failure (connection loss, timeout, 5xx)."""
 
 
 class EmbeddingModelMismatchError(VectorIndexError):
@@ -160,7 +165,12 @@ class DatabaseVectorIndex:
                     "error_type": type(exc).__name__,
                 },
             )
-            raise VectorIndexError(
+            error_type = (
+                TransientVectorIndexError
+                if is_transient_error(exc)
+                else VectorIndexError
+            )
+            raise error_type(
                 "Document embeddings could not be generated."
             ) from exc
 
@@ -222,7 +232,12 @@ class DatabaseVectorIndex:
                     "error_type": type(exc).__name__,
                 },
             )
-            raise VectorIndexError(
+            error_type = (
+                TransientVectorIndexError
+                if is_transient_error(exc)
+                else VectorIndexError
+            )
+            raise error_type(
                 "Document embeddings could not be stored."
             ) from exc
 

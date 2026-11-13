@@ -5,7 +5,6 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
-from langchain_core.documents import Document as LangChainDocument
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
@@ -28,16 +27,18 @@ from app.schemas.documents.document import (
     DocumentUpdate,
 )
 from app.services.documents import documents as document_service
+from app.services.documents.background import (
+    create_uploaded_ingestion,
+    enqueue_document_ingestion,
+    start_ingestion,
+)
 from app.services.documents.document_ingestion import (
-    DocumentIngestionError,
     DocumentIntegrityError,
     DocumentNotReadyError,
     IngestionInProgressError,
     PdfValidationError,
     activate_document,
     deactivate_document,
-    ingest_document,
-    load_stored_pdf_documents,
     validate_upload,
 )
 from app.services.documents.storage import (
@@ -157,8 +158,8 @@ async def list_documents(
 @router.post(
     "/documents",
     response_model=DocumentResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Admin: upload a PDF document and ingest it",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Admin: upload a PDF document and queue ingestion",
 )
 async def upload_document(
     file: Annotated[UploadFile, File()],
@@ -196,7 +197,6 @@ async def upload_document(
         raise _validation_error(exc) from exc
 
     storage_key = ""
-    page_documents: list[LangChainDocument] = []
     async with advisory_lock(session, STORAGE_OPERATION_LOCK_KEY):
         for _attempt in range(3):
             candidate = storage.generate_key(uploaded.original_filename)
@@ -235,29 +235,7 @@ async def upload_document(
             )
 
         try:
-            page_documents = await run_in_threadpool(
-                load_stored_pdf_documents,
-                storage,
-                storage_key,
-                max_pages=settings.max_pdf_pages,
-            )
-        except PdfValidationError as exc:
-            await _remove_stored_file(storage, storage_key)
-            raise _validation_error(exc) from exc
-        except DocumentIngestionError as exc:
-            await _remove_stored_file(storage, storage_key)
-            logger.warning(
-                "Document storage read failed during upload validation",
-                extra={"event": "document_storage_read_failed"},
-            )
-            raise AppError(
-                "Document storage is unavailable.",
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                code="document_storage_unavailable",
-            ) from exc
-
-        try:
-            document = await document_service.create_uploaded_document(
+            pending = await create_uploaded_ingestion(
                 session,
                 uploaded=uploaded,
                 storage_key=storage_key,
@@ -267,26 +245,18 @@ async def upload_document(
                 version=version,
                 uploaded_by_id=actor_id,
             )
-            await session.commit()
         except IntegrityError as exc:
-            await session.rollback()
             await _remove_stored_file(storage, storage_key)
             raise _document_conflict_error() from exc
         except Exception:
-            await session.rollback()
             await _remove_stored_file(storage, storage_key)
             raise
 
-    document = await ingest_document(
+    document = await start_ingestion(
         session,
-        document.id,
-        storage,
-        vector_index,
-        max_pages=settings.max_pdf_pages,
-        chunk_size=settings.document_chunk_size,
-        chunk_overlap=settings.document_chunk_overlap,
-        ingestion_version=settings.document_ingestion_version,
-        prepared_documents=page_documents,
+        pending,
+        storage=storage,
+        vector_index=vector_index,
     )
 
     logger.info(
@@ -402,7 +372,8 @@ async def delete_document(
 @router.post(
     "/documents/{document_id}/ingest",
     response_model=DocumentResponse,
-    summary="Admin: re-ingest a stored PDF document",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Admin: queue re-ingestion of a stored PDF document",
 )
 async def ingest_stored_document(
     document_id: uuid.UUID,
@@ -413,15 +384,11 @@ async def ingest_stored_document(
 ) -> DocumentResponse:
     actor_id = admin.id
     try:
-        document = await ingest_document(
+        document = await enqueue_document_ingestion(
             session,
             document_id,
-            storage,
-            vector_index,
-            max_pages=settings.max_pdf_pages,
-            chunk_size=settings.document_chunk_size,
-            chunk_overlap=settings.document_chunk_overlap,
-            ingestion_version=settings.document_ingestion_version,
+            storage=storage,
+            vector_index=vector_index,
         )
     except IngestionInProgressError as exc:
         raise AppError(

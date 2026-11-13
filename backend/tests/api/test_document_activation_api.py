@@ -91,7 +91,7 @@ async def test_admin_activates_and_deactivates_ready_document(
 ) -> None:
     _, admin_token = await seed_admin(migrated_db_session)
     uploaded = await _upload(api_client, admin_token)
-    assert uploaded.status_code == 201, uploaded.text
+    assert uploaded.status_code == 202, uploaded.text
     document_id = uploaded.json()["id"]
     assert uploaded.json()["is_active"] is False
 
@@ -283,7 +283,7 @@ async def test_inactive_uploads_are_not_listed_as_active(
 ) -> None:
     _, admin_token = await seed_admin(migrated_db_session)
     uploaded = await _upload(api_client, admin_token)
-    assert uploaded.status_code == 201
+    assert uploaded.status_code == 202
 
     response = await api_client.get(
         "/api/v1/admin/documents",

@@ -27,6 +27,7 @@ from app.services.documents.storage_coordination import (
 )
 from app.services.rag.vector_index import VectorIndex
 from app.services.shared.authorization import AccessDeniedError
+from app.services.shared.retry import TransientError, is_transient_error
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,10 @@ class DocumentIntegrityError(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
+
+
+class TransientIngestionError(DocumentIngestionError, TransientError):
+    """Retryable ingestion failure; the document is left FAILED for a retry."""
 
 
 class IngestionInProgressError(Exception):
@@ -448,6 +453,25 @@ async def _mark_failed(
     return document
 
 
+async def _fail_ingestion(
+    session: AsyncSession,
+    document_id: uuid.UUID,
+    message: str,
+    exc: BaseException,
+) -> Document:
+    """Record a terminal failure and re-raise transient failures for retry.
+
+    The document is always moved out of PROCESSING so a Celery retry can claim
+    it again. Transient failures additionally propagate a typed error so the
+    task layer retries instead of treating the failure as final.
+    """
+
+    document = await _mark_failed(session, document_id, message)
+    if is_transient_error(exc):
+        raise TransientIngestionError(message) from exc
+    return document
+
+
 async def _stage_chunks(
     session: AsyncSession,
     document_id: uuid.UUID,
@@ -609,28 +633,31 @@ async def _ingest_document_locked(
                 "error_type": type(exc).__name__,
             },
         )
-        return await _mark_failed(
+        return await _fail_ingestion(
             session,
             document_id,
             INGESTION_ERROR_EMBEDDING,
+            exc,
         )
 
     try:
         await _stage_chunks(session, document_id, staged_chunks)
     except IngestionInProgressError:
         raise
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Document chunk persistence failed",
             extra={
                 "event": "document_ingestion_persistence_failed",
                 "document_id": str(document_id),
+                "error_type": type(exc).__name__,
             },
         )
-        return await _mark_failed(
+        return await _fail_ingestion(
             session,
             document_id,
             INGESTION_ERROR_UNEXPECTED,
+            exc,
         )
 
     try:
@@ -648,10 +675,11 @@ async def _ingest_document_locked(
                 "error_type": type(exc).__name__,
             },
         )
-        return await _mark_failed(
+        return await _fail_ingestion(
             session,
             document_id,
             INGESTION_ERROR_EMBEDDING,
+            exc,
         )
 
     try:
@@ -663,18 +691,20 @@ async def _ingest_document_locked(
         )
     except IngestionInProgressError:
         raise
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Document indexing finalization failed",
             extra={
                 "event": "document_ingestion_finalization_failed",
                 "document_id": str(document_id),
+                "error_type": type(exc).__name__,
             },
         )
-        return await _mark_failed(
+        return await _fail_ingestion(
             session,
             document_id,
             INGESTION_ERROR_UNEXPECTED,
+            exc,
         )
 
 

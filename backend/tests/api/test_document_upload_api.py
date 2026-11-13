@@ -10,6 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.document import Document
 from app.services.documents import documents as document_service
+from app.services.documents.document_ingestion import (
+    INGESTION_ERROR_PAGES,
+    INGESTION_ERROR_PARSE,
+)
 from app.services.documents.storage import LocalFileStorage
 from tests.pdf_factory import build_encrypted_pdf, build_pdf
 from tests.support import bearer, seed_admin, seed_customer, seed_technician
@@ -57,7 +61,7 @@ async def test_upload_requires_admin(
         assert response.json()["error"]["code"] == "forbidden"
 
 
-async def test_upload_rejects_invalid_signature(
+async def test_upload_marks_invalid_pdf_failed(
     api_client: Any,
     migrated_db_session: AsyncSession,
     document_storage: LocalFileStorage,
@@ -70,9 +74,11 @@ async def test_upload_rejects_invalid_signature(
         data=b"%PDF-1.4\nthis is not a valid pdf",
     )
 
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "invalid_document"
-    assert list(document_storage.iter_keys()) == []
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["ingestion_status"] == "failed"
+    assert body["ingestion_error"] == INGESTION_ERROR_PARSE
+    assert len(list(document_storage.iter_keys())) == 1
 
 
 async def test_upload_rejects_wrong_extension(
@@ -147,7 +153,7 @@ async def test_upload_rejects_oversized_file(
     assert list(document_storage.iter_keys()) == []
 
 
-async def test_upload_rejects_excessive_page_count(
+async def test_upload_marks_excessive_page_count_failed(
     api_client: Any,
     migrated_db_session: AsyncSession,
     document_storage: LocalFileStorage,
@@ -162,9 +168,11 @@ async def test_upload_rejects_excessive_page_count(
         data=build_pdf(["One", "Two", "Three"]),
     )
 
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "document_page_limit"
-    assert list(document_storage.iter_keys()) == []
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["ingestion_status"] == "failed"
+    assert body["ingestion_error"] == INGESTION_ERROR_PAGES
+    assert len(list(document_storage.iter_keys())) == 1
 
 
 async def test_upload_sanitizes_client_filename(
@@ -181,7 +189,7 @@ async def test_upload_sanitizes_client_filename(
         filename="../../evil.pdf",
     )
 
-    assert response.status_code == 201, response.text
+    assert response.status_code == 202, response.text
     body = response.json()
     assert body["original_filename"] == "evil.pdf"
     keys = list(document_storage.iter_keys())
@@ -248,11 +256,11 @@ async def test_upload_parses_pdf_once(
         data=build_pdf(["Single parse content"]),
     )
 
-    assert response.status_code == 201, response.text
+    assert response.status_code == 202, response.text
     assert len(load_calls) == 1
 
 
-async def test_upload_removes_stored_file_when_pdf_is_encrypted(
+async def test_upload_marks_encrypted_pdf_failed(
     api_client: Any,
     migrated_db_session: AsyncSession,
     document_storage: LocalFileStorage,
@@ -265,11 +273,13 @@ async def test_upload_removes_stored_file_when_pdf_is_encrypted(
         data=build_encrypted_pdf(["Protected content"]),
     )
 
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "invalid_document"
-    assert list(document_storage.iter_keys()) == []
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["ingestion_status"] == "failed"
+    assert body["ingestion_error"] == INGESTION_ERROR_PARSE
+    assert len(list(document_storage.iter_keys())) == 1
 
     document_count = await migrated_db_session.scalar(
         select(func.count()).select_from(Document)
     )
-    assert document_count == 0
+    assert document_count == 1

@@ -1,6 +1,22 @@
 name: fieldops-ai
 
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: fieldops-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
   postgres:
     image: pgvector/pgvector:pg17
     container_name: fieldops-postgres
@@ -22,3 +38,4 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:

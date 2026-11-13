@@ -33,6 +33,9 @@ EXPECTED_TABLES = {
     "document_chunks",
     "document_chunk_embeddings",
     "workflow_runs",
+    "background_tasks",
+    "webhook_events",
+    "outbox_events",
 }
 
 
@@ -320,6 +323,58 @@ def test_expected_constraints_and_indexes_exist(
             "ix_document_chunk_embeddings_embedding_hnsw",
         } <= embedding_indexes
 
+        background_task_checks = {
+            check["name"]
+            for check in inspector.get_check_constraints("background_tasks")
+        }
+        assert {
+            "ck_background_tasks_attempts_non_negative",
+            "ck_background_tasks_background_task_status",
+        } <= background_task_checks
+
+        background_task_indexes = {
+            index["name"]
+            for index in inspector.get_indexes("background_tasks")
+        }
+        assert {
+            "ix_background_tasks_status",
+            "ix_background_tasks_task_name",
+            "ix_background_tasks_resource",
+        } <= background_task_indexes
+
+        background_task_uniques = {
+            unique["name"]
+            for unique in inspector.get_unique_constraints("background_tasks")
+        }
+        assert "uq_background_tasks_celery_task_id" in background_task_uniques
+
+        webhook_event_checks = {
+            check["name"]
+            for check in inspector.get_check_constraints("webhook_events")
+        }
+        assert {
+            "ck_webhook_events_payload_sha256_format",
+            "ck_webhook_events_webhook_event_status",
+        } <= webhook_event_checks
+
+        webhook_event_indexes = {
+            index["name"]
+            for index in inspector.get_indexes("webhook_events")
+        }
+        assert {
+            "ix_webhook_events_provider",
+            "ix_webhook_events_status",
+        } <= webhook_event_indexes
+
+        webhook_event_uniques = {
+            unique["name"]
+            for unique in inspector.get_unique_constraints("webhook_events")
+        }
+        assert (
+            "uq_webhook_events_provider_external_event_id"
+            in webhook_event_uniques
+        )
+
 
 def test_downgrade_and_reupgrade(
     empty_migration_database: MigrationDatabase,
@@ -505,7 +560,7 @@ def test_clerk_identity_migration_downgrade_requires_password_hashes(
             )
         ).scalar_one()
 
-    assert version == "0014_work_order_proposals"
+    assert version == "0016_outbox_events"
     assert clerk_user_id == "user_clerk_test"
 
 
@@ -808,7 +863,7 @@ def test_complaint_history_downgrade_refuses_and_requires_archival(
             )
         ).all()
 
-    assert version == "0014_work_order_proposals"
+    assert version == "0016_outbox_events"
     assert count == 1
     assert archived[0].complaint_id == complaint_id
     assert archived[0].sequence_number == 1
@@ -1065,7 +1120,7 @@ def test_document_storage_migration_downgrade_refuses_storage_backed_rows(
             )
         ).scalar_one()
 
-    assert version == "0014_work_order_proposals"
+    assert version == "0016_outbox_events"
     assert storage_key == "aa/abcd.pdf"
 
     with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
@@ -1202,7 +1257,7 @@ def test_document_integrity_migration_checksum_format_and_recovery_column(
             text("SELECT version_num FROM alembic_version")
         ).scalar_one()
 
-    assert version == "0014_work_order_proposals"
+    assert version == "0016_outbox_events"
 
 def test_document_embeddings_migration_creates_pgvector_schema(
     empty_migration_database: MigrationDatabase,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlparse
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -12,6 +13,14 @@ from sqlalchemy.exc import ArgumentError
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 DEFAULT_DATABASE_URL = "postgresql+asyncpg://fieldops:fieldops@localhost:5432/fieldops"
+DEFAULT_REDIS_URL = "redis://localhost:6379/0"
+DEFAULT_CELERY_TASK_MAX_RETRIES = 3
+DEFAULT_CELERY_TASK_RETRY_BACKOFF_SECONDS = 5
+DEFAULT_CELERY_TASK_RETRY_BACKOFF_MAX_SECONDS = 60
+DEFAULT_CELERY_TASK_TIME_LIMIT_SECONDS = 900
+DEFAULT_CELERY_TASK_SOFT_TIME_LIMIT_SECONDS = 840
+DEFAULT_CELERY_OUTBOX_DISPATCH_LIMIT = 100
+DEFAULT_CELERY_OUTBOX_MAX_PUBLISH_ATTEMPTS = 10
 DEFAULT_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
 DEFAULT_STORAGE_ROOT = BACKEND_DIR / "var" / "document_storage"
 DEFAULT_MAX_UPLOAD_SIZE_BYTES = 25 * 1024 * 1024
@@ -209,6 +218,43 @@ class Settings(BaseSettings):
         ge=1,
     )
 
+    redis_url: str = DEFAULT_REDIS_URL
+    celery_broker_url: str | None = None
+    celery_result_backend: str | None = None
+    celery_task_always_eager: bool = False
+    celery_task_eager_propagates: bool = True
+    celery_task_max_retries: int = Field(
+        default=DEFAULT_CELERY_TASK_MAX_RETRIES,
+        ge=0,
+        le=10,
+    )
+    celery_task_retry_backoff_seconds: int = Field(
+        default=DEFAULT_CELERY_TASK_RETRY_BACKOFF_SECONDS,
+        ge=0,
+    )
+    celery_task_retry_backoff_max_seconds: int = Field(
+        default=DEFAULT_CELERY_TASK_RETRY_BACKOFF_MAX_SECONDS,
+        ge=0,
+    )
+    celery_task_time_limit_seconds: int = Field(
+        default=DEFAULT_CELERY_TASK_TIME_LIMIT_SECONDS,
+        ge=1,
+    )
+    celery_task_soft_time_limit_seconds: int = Field(
+        default=DEFAULT_CELERY_TASK_SOFT_TIME_LIMIT_SECONDS,
+        ge=1,
+    )
+    celery_outbox_dispatch_limit: int = Field(
+        default=DEFAULT_CELERY_OUTBOX_DISPATCH_LIMIT,
+        ge=1,
+        le=1000,
+    )
+    celery_outbox_max_publish_attempts: int = Field(
+        default=DEFAULT_CELERY_OUTBOX_MAX_PUBLISH_ATTEMPTS,
+        ge=1,
+        le=100,
+    )
+
     db_pool_size: int = Field(default=5, ge=1)
     db_max_overflow: int = Field(default=10, ge=0)
     db_pool_timeout: float = Field(default=30.0, gt=0)
@@ -339,6 +385,37 @@ class Settings(BaseSettings):
             raise ValueError("DOCUMENT_INGESTION_VERSION must not be blank")
         return version
 
+    @field_validator(
+        "redis_url",
+        "celery_broker_url",
+        "celery_result_backend",
+        mode="before",
+    )
+    @classmethod
+    def normalize_optional_redis_url(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator(
+        "redis_url",
+        "celery_broker_url",
+        "celery_result_backend",
+    )
+    @classmethod
+    def validate_redis_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parsed = urlparse(value)
+        if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname:
+            raise ValueError(
+                "Redis URLs must use redis:// or rediss:// and include a hostname"
+            )
+        return value
+
     @field_validator("google_api_key", mode="before")
     @classmethod
     def normalize_google_api_key(cls, value: object) -> object:
@@ -403,6 +480,26 @@ class Settings(BaseSettings):
         if self.document_chunk_overlap >= self.document_chunk_size:
             raise ValueError(
                 "DOCUMENT_CHUNK_OVERLAP must be smaller than DOCUMENT_CHUNK_SIZE"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_celery_settings(self) -> Settings:
+        if (
+            self.celery_task_soft_time_limit_seconds
+            >= self.celery_task_time_limit_seconds
+        ):
+            raise ValueError(
+                "CELERY_TASK_SOFT_TIME_LIMIT_SECONDS must be smaller than "
+                "CELERY_TASK_TIME_LIMIT_SECONDS"
+            )
+        if (
+            self.celery_task_retry_backoff_seconds
+            > self.celery_task_retry_backoff_max_seconds
+        ):
+            raise ValueError(
+                "CELERY_TASK_RETRY_BACKOFF_SECONDS must not exceed "
+                "CELERY_TASK_RETRY_BACKOFF_MAX_SECONDS"
             )
         return self
 
@@ -514,6 +611,14 @@ class Settings(BaseSettings):
             for party in self.clerk_authorized_parties.split(",")
             if party.strip()
         ]
+
+    @property
+    def effective_celery_broker_url(self) -> str:
+        return self.celery_broker_url or self.redis_url
+
+    @property
+    def effective_celery_result_backend(self) -> str:
+        return self.celery_result_backend or self.redis_url
 
     @property
     def is_production(self) -> bool:

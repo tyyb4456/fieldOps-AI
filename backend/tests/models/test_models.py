@@ -9,6 +9,7 @@ from sqlalchemy.orm import configure_mappers
 
 from app.db.base import Base
 from app.models import (
+    BackgroundTask,
     Complaint,
     ComplaintHistory,
     CompletionReport,
@@ -19,16 +20,21 @@ from app.models import (
     DocumentChunkEmbedding,
     Equipment,
     Message,
+    OutboxEvent,
     ServiceRecord,
     Technician,
     TechnicianAssignment,
     User,
+    WebhookEvent,
     WorkflowRun,
     WorkOrder,
     WorkOrderProposal,
 )
 
 EXPECTED_TABLES = {
+    "background_tasks",
+    "outbox_events",
+    "webhook_events",
     "users",
     "customers",
     "technicians",
@@ -49,6 +55,9 @@ EXPECTED_TABLES = {
 }
 
 EXPECTED_MODELS = {
+    "BackgroundTask": BackgroundTask,
+    "OutboxEvent": OutboxEvent,
+    "WebhookEvent": WebhookEvent,
     "User": User,
     "Customer": Customer,
     "Technician": Technician,
@@ -112,15 +121,18 @@ EXPECTED_RELATIONSHIPS = {
     DocumentChunk: {"document"},
     DocumentChunkEmbedding: set(),
     WorkflowRun: {"complaint"},
+    BackgroundTask: set(),
+    OutboxEvent: set(),
+    WebhookEvent: set(),
 }
 
 
-def test_all_seventeen_models_are_registered() -> None:
+def test_all_models_are_registered() -> None:
     configure_mappers()
 
     table_names = set(Base.metadata.tables)
     assert table_names == EXPECTED_TABLES
-    assert len(table_names) == 17
+    assert len(table_names) == 20
 
     for name, model in EXPECTED_MODELS.items():
         assert model.__name__ == name
@@ -211,6 +223,7 @@ def test_jsonb_columns_are_declared() -> None:
         (ServiceRecord.__tablename__, "parts_used"),
         (DocumentChunk.__tablename__, "metadata"),
         (DocumentChunkEmbedding.__tablename__, "langchain_metadata"),
+        (OutboxEvent.__tablename__, "payload"),
     }
 
     for table_name, column_name in jsonb_columns:
@@ -230,6 +243,12 @@ def test_timestamps_are_timezone_aware() -> None:
         (ServiceRecord.__tablename__, "recorded_at"),
         (CompletionReport.__tablename__, "submitted_at"),
         (WorkflowRun.__tablename__, "started_at"),
+        (BackgroundTask.__tablename__, "started_at"),
+        (BackgroundTask.__tablename__, "finished_at"),
+        (OutboxEvent.__tablename__, "published_at"),
+        (OutboxEvent.__tablename__, "created_at"),
+        (OutboxEvent.__tablename__, "updated_at"),
+        (WebhookEvent.__tablename__, "processed_at"),
     }
 
     for table_name, column_name in timestamp_columns:

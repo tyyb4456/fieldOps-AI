@@ -10,6 +10,7 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from pydantic import SecretStr
 
 from app.core.config import settings
+from app.services.shared.retry import TransientError, is_transient_error
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,20 @@ class EmbeddingGenerationError(EmbeddingError):
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
+
+
+class TransientEmbeddingError(EmbeddingGenerationError, TransientError):
+    """Retryable embedding provider failure (quota, timeout, 5xx)."""
+
+
+class PermanentEmbeddingError(EmbeddingGenerationError):
+    """Terminal embedding provider failure (auth, bad request, invalid input)."""
+
+
+def _classification(exc: BaseException) -> type[EmbeddingGenerationError]:
+    if is_transient_error(exc):
+        return TransientEmbeddingError
+    return PermanentEmbeddingError
 
 
 class GoogleEmbeddingProvider(Embeddings):
@@ -100,7 +115,7 @@ class GoogleEmbeddingProvider(Embeddings):
             )
         except Exception as exc:
             self._log_failure("document", exc)
-            raise EmbeddingGenerationError(
+            raise _classification(exc)(
                 "The document could not be embedded."
             ) from exc
         return self._validate_vectors(vectors, expected_count=len(texts))
@@ -114,7 +129,7 @@ class GoogleEmbeddingProvider(Embeddings):
             )
         except Exception as exc:
             self._log_failure("query", exc)
-            raise EmbeddingGenerationError(
+            raise _classification(exc)(
                 "The search query could not be embedded."
             ) from exc
         return self._validate_vector(vector)[0]

@@ -107,7 +107,7 @@ async def test_admin_uploads_inactive_ingested_document(
         document_name="  INV-5000 Technical Manual  ",
     )
 
-    assert response.status_code == 201, response.text
+    assert response.status_code == 202, response.text
     body = response.json()
     assert body["manufacturer"] == "Acme Solar"
     assert body["document_name"] == "INV-5000 Technical Manual"
@@ -150,7 +150,7 @@ async def test_document_duplicate_returns_conflict_and_cleans_storage(
 ) -> None:
     _, admin_token = await _seed_admin_token(migrated_db_session)
     first = await _upload_document(api_client, admin_token)
-    assert first.status_code == 201, first.text
+    assert first.status_code == 202, first.text
 
     duplicate = await _upload_document(api_client, admin_token)
 
@@ -247,7 +247,7 @@ async def test_admin_reads_and_updates_metadata_without_activation(
 ) -> None:
     _, admin_token = await _seed_admin_token(migrated_db_session)
     uploaded = await _upload_document(api_client, admin_token)
-    assert uploaded.status_code == 201, uploaded.text
+    assert uploaded.status_code == 202, uploaded.text
     document_id = uploaded.json()["id"]
 
     read = await api_client.get(
@@ -355,7 +355,7 @@ async def test_admin_delete_removes_document_chunks_and_stored_file(
 ) -> None:
     _, admin_token = await _seed_admin_token(migrated_db_session)
     uploaded = await _upload_document(api_client, admin_token)
-    assert uploaded.status_code == 201, uploaded.text
+    assert uploaded.status_code == 202, uploaded.text
     document_id = uploaded.json()["id"]
     assert len(list(document_storage.iter_keys())) == 1
 

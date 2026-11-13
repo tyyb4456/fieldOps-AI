@@ -93,6 +93,27 @@ class IngestionStatus(str, PyEnum):
     FAILED = "failed"
 
 
+class BackgroundTaskStatus(str, PyEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class WebhookEventStatus(str, PyEnum):
+    RECEIVED = "received"
+    PROCESSED = "processed"
+    FAILED = "failed"
+    IGNORED = "ignored"
+
+
+class OutboxEventStatus(str, PyEnum):
+    PENDING = "pending"
+    PUBLISHED = "published"
+    FAILED = "failed"
+
+
 def enum_type(
     enum_cls: type[PyEnum],
     name: str,
@@ -111,14 +132,17 @@ def enum_type(
 
 __all__ = [
     "AssignmentStatus",
+    "BackgroundTaskStatus",
     "ComplaintChannel",
     "ComplaintStatus",
     "EvidenceStatus",
     "IngestionStatus",
     "MediaType",
     "MessageSenderType",
+    "OutboxEventStatus",
     "Priority",
     "UserRole",
+    "WebhookEventStatus",
     "WorkOrderProposalStatus",
     "WorkOrderStatus",
     "WorkflowRunStatus",

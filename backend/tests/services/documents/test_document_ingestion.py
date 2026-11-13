@@ -255,7 +255,7 @@ async def test_uploaded_empty_text_pdf_is_stored_as_failed(
 
     response = await _upload(api_client, admin_token, ["", "   "])
 
-    assert response.status_code == 201, response.text
+    assert response.status_code == 202, response.text
     body = response.json()
     assert body["ingestion_status"] == "failed"
     assert body["ingestion_error"] == INGESTION_ERROR_EMPTY
@@ -277,7 +277,7 @@ async def test_chunk_metadata_tracks_pages_and_offsets(
         admin_token,
         ["Page one text", "", "Page three text"],
     )
-    assert response.status_code == 201, response.text
+    assert response.status_code == 202, response.text
     document_id = response.json()["id"]
 
     chunks = await migrated_db_session.execute(
@@ -307,7 +307,7 @@ async def test_embedding_failure_marks_ingestion_failed(
 
     response = await _upload(api_client, admin_token, ["Manual text"])
 
-    assert response.status_code == 201, response.text
+    assert response.status_code == 202, response.text
     body = response.json()
     assert body["ingestion_status"] == "failed"
     assert body["ingestion_error"] == INGESTION_ERROR_EMBEDDING
@@ -333,7 +333,7 @@ async def test_reingestion_atomically_replaces_chunks(
 ) -> None:
     _, admin_token = await seed_admin(migrated_db_session)
     uploaded = await _upload(api_client, admin_token, ["Original manual text"])
-    assert uploaded.status_code == 201, uploaded.text
+    assert uploaded.status_code == 202, uploaded.text
     document_id = uploaded.json()["id"]
 
     activated = await api_client.post(
@@ -363,7 +363,7 @@ async def test_reingestion_atomically_replaces_chunks(
         headers=bearer(admin_token),
     )
 
-    assert response.status_code == 200, response.text
+    assert response.status_code == 202, response.text
     assert response.json()["ingestion_status"] == "ready"
     assert response.json()["is_active"] is False
 
@@ -393,7 +393,7 @@ async def test_reingestion_parses_pdf_once(
 
     _, admin_token = await seed_admin(migrated_db_session)
     uploaded = await _upload(api_client, admin_token, ["Parse count manual"])
-    assert uploaded.status_code == 201, uploaded.text
+    assert uploaded.status_code == 202, uploaded.text
     document_id = uploaded.json()["id"]
 
     activated = await api_client.post(
@@ -428,7 +428,7 @@ async def test_reingestion_parses_pdf_once(
         headers=bearer(admin_token),
     )
 
-    assert response.status_code == 200, response.text
+    assert response.status_code == 202, response.text
     assert len(load_calls) == 1
 
 
@@ -439,7 +439,7 @@ async def test_failed_reingestion_preserves_old_chunks_and_deactivates(
 ) -> None:
     _, admin_token = await seed_admin(migrated_db_session)
     uploaded = await _upload(api_client, admin_token, ["Stable manual text"])
-    assert uploaded.status_code == 201, uploaded.text
+    assert uploaded.status_code == 202, uploaded.text
     document_id = uploaded.json()["id"]
 
     activated = await api_client.post(
@@ -464,7 +464,7 @@ async def test_failed_reingestion_preserves_old_chunks_and_deactivates(
         headers=bearer(admin_token),
     )
 
-    assert response.status_code == 200, response.text
+    assert response.status_code == 202, response.text
     body = response.json()
     assert body["ingestion_status"] == "failed"
     assert body["is_active"] is False
@@ -484,7 +484,7 @@ async def test_failed_replacement_embedding_preserves_previous_chunks(
 ) -> None:
     _, admin_token = await seed_admin(migrated_db_session)
     uploaded = await _upload(api_client, admin_token, ["Stable manual text"])
-    assert uploaded.status_code == 201, uploaded.text
+    assert uploaded.status_code == 202, uploaded.text
     document_id = uploaded.json()["id"]
 
     activated = await api_client.post(
@@ -518,7 +518,7 @@ async def test_failed_replacement_embedding_preserves_previous_chunks(
         headers=bearer(admin_token),
     )
 
-    assert response.status_code == 200, response.text
+    assert response.status_code == 202, response.text
     body = response.json()
     assert body["ingestion_status"] == "failed"
     assert body["is_active"] is False
@@ -541,7 +541,7 @@ async def test_concurrent_ingestion_is_rejected(
 ) -> None:
     _, admin_token = await seed_admin(migrated_db_session)
     uploaded = await _upload(api_client, admin_token, ["Manual text"])
-    assert uploaded.status_code == 201, uploaded.text
+    assert uploaded.status_code == 202, uploaded.text
     document_id = uploaded.json()["id"]
 
     document = await migrated_db_session.get(Document, document_id)
@@ -565,7 +565,7 @@ async def test_missing_stored_file_marks_ingestion_failed(
 ) -> None:
     _, admin_token = await seed_admin(migrated_db_session)
     uploaded = await _upload(api_client, admin_token, ["Manual text"])
-    assert uploaded.status_code == 201, uploaded.text
+    assert uploaded.status_code == 202, uploaded.text
     document_id = uploaded.json()["id"]
 
     storage_key = await migrated_db_session.scalar(
@@ -579,6 +579,6 @@ async def test_missing_stored_file_marks_ingestion_failed(
         headers=bearer(admin_token),
     )
 
-    assert response.status_code == 200, response.text
+    assert response.status_code == 202, response.text
     assert response.json()["ingestion_status"] == "failed"
     assert "missing or unreadable" in response.json()["ingestion_error"]

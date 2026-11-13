@@ -4,7 +4,15 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import (
+    DEFAULT_CELERY_OUTBOX_DISPATCH_LIMIT,
+    DEFAULT_CELERY_OUTBOX_MAX_PUBLISH_ATTEMPTS,
+    DEFAULT_CELERY_TASK_MAX_RETRIES,
+    DEFAULT_CELERY_TASK_RETRY_BACKOFF_MAX_SECONDS,
+    DEFAULT_CELERY_TASK_RETRY_BACKOFF_SECONDS,
+    DEFAULT_CELERY_TASK_SOFT_TIME_LIMIT_SECONDS,
+    DEFAULT_CELERY_TASK_TIME_LIMIT_SECONDS,
     DEFAULT_DATABASE_URL,
+    DEFAULT_REDIS_URL,
     Environment,
     Settings,
 )
@@ -40,6 +48,18 @@ ENV_KEYS = (
     "CHAT_MAX_OUTPUT_TOKENS",
     "ANSWER_MIN_SIMILARITY",
     "ANSWER_MAX_CONTEXT_CHARS",
+    "REDIS_URL",
+    "CELERY_BROKER_URL",
+    "CELERY_RESULT_BACKEND",
+    "CELERY_TASK_ALWAYS_EAGER",
+    "CELERY_TASK_EAGER_PROPAGATES",
+    "CELERY_TASK_MAX_RETRIES",
+    "CELERY_TASK_RETRY_BACKOFF_SECONDS",
+    "CELERY_TASK_RETRY_BACKOFF_MAX_SECONDS",
+    "CELERY_TASK_TIME_LIMIT_SECONDS",
+    "CELERY_TASK_SOFT_TIME_LIMIT_SECONDS",
+    "CELERY_OUTBOX_DISPATCH_LIMIT",
+    "CELERY_OUTBOX_MAX_PUBLISH_ATTEMPTS",
 )
 
 PRODUCTION_DATABASE_URL = (
@@ -98,6 +118,38 @@ def test_default_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.chat_max_output_tokens == 1024
     assert settings.answer_min_similarity == 0.3
     assert settings.answer_max_context_chars == 16000
+    assert settings.redis_url == DEFAULT_REDIS_URL
+    assert settings.celery_broker_url is None
+    assert settings.celery_result_backend is None
+    assert settings.effective_celery_broker_url == DEFAULT_REDIS_URL
+    assert settings.effective_celery_result_backend == DEFAULT_REDIS_URL
+    assert settings.celery_task_always_eager is False
+    assert settings.celery_task_eager_propagates is True
+    assert settings.celery_task_max_retries == DEFAULT_CELERY_TASK_MAX_RETRIES
+    assert (
+        settings.celery_task_retry_backoff_seconds
+        == DEFAULT_CELERY_TASK_RETRY_BACKOFF_SECONDS
+    )
+    assert (
+        settings.celery_task_retry_backoff_max_seconds
+        == DEFAULT_CELERY_TASK_RETRY_BACKOFF_MAX_SECONDS
+    )
+    assert (
+        settings.celery_task_time_limit_seconds
+        == DEFAULT_CELERY_TASK_TIME_LIMIT_SECONDS
+    )
+    assert (
+        settings.celery_task_soft_time_limit_seconds
+        == DEFAULT_CELERY_TASK_SOFT_TIME_LIMIT_SECONDS
+    )
+    assert (
+        settings.celery_outbox_dispatch_limit
+        == DEFAULT_CELERY_OUTBOX_DISPATCH_LIMIT
+    )
+    assert (
+        settings.celery_outbox_max_publish_attempts
+        == DEFAULT_CELERY_OUTBOX_MAX_PUBLISH_ATTEMPTS
+    )
 
 
 @pytest.mark.parametrize(
@@ -429,3 +481,48 @@ def test_chat_generation_settings_are_bounded() -> None:
 def test_production_requires_openai_api_key() -> None:
     with pytest.raises(ValidationError):
         production_settings(openai_api_key=None)
+
+
+def test_redis_urls_accept_redis_and_rediss_schemes() -> None:
+    settings = Settings(
+        _env_file=None,
+        redis_url="rediss://redis.example.com:6380/1",
+        celery_broker_url="redis://broker.example.com:6379/2",
+        celery_result_backend="redis://backend.example.com:6379/3",
+    )
+
+    assert settings.redis_url == "rediss://redis.example.com:6380/1"
+    assert (
+        settings.effective_celery_broker_url
+        == "redis://broker.example.com:6379/2"
+    )
+    assert (
+        settings.effective_celery_result_backend
+        == "redis://backend.example.com:6379/3"
+    )
+
+
+def test_redis_urls_reject_non_redis_schemes() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, redis_url="http://localhost:6379/0")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, redis_url="redis://")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, celery_broker_url="amqp://localhost")
+
+
+def test_celery_settings_are_bounded_and_ordered() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, celery_task_max_retries=-1)
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            celery_task_soft_time_limit_seconds=900,
+            celery_task_time_limit_seconds=900,
+        )
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            celery_task_retry_backoff_seconds=120,
+            celery_task_retry_backoff_max_seconds=60,
+        )

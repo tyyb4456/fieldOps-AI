@@ -17,6 +17,7 @@ os.environ["ENVIRONMENT"] = "test"
 os.environ["DEBUG"] = "false"
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["LOG_LEVEL"] = "WARNING"
+os.environ["CELERY_TASK_ALWAYS_EAGER"] = "true"
 
 import jwt
 import pytest
