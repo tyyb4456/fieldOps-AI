@@ -120,6 +120,28 @@ def test_expected_constraints_and_indexes_exist(
             "ix_work_order_proposals_status",
         } <= proposal_indexes
 
+        proposal_columns = {
+            column["name"]: column
+            for column in inspector.get_columns("work_order_proposals")
+        }
+        assert proposal_columns["source_workflow_run_id"]["nullable"] is True
+
+        proposal_uniques = {
+            unique["name"]
+            for unique in inspector.get_unique_constraints("work_order_proposals")
+        }
+        assert "uq_work_order_proposals_source_workflow_run_id" in proposal_uniques
+
+        proposal_fks = {
+            fk["name"]: fk
+            for fk in inspector.get_foreign_keys("work_order_proposals")
+        }
+        source_run_fk = proposal_fks[
+            "fk_work_order_proposals_source_workflow_run_id_workflow_runs"
+        ]
+        assert source_run_fk["referred_table"] == "workflow_runs"
+        assert source_run_fk["options"].get("ondelete") == "RESTRICT"
+
 
         complaint_fks = {
             fk["name"]: fk for fk in inspector.get_foreign_keys("complaints")
@@ -376,6 +398,88 @@ def test_expected_constraints_and_indexes_exist(
         )
 
 
+def test_workflow_proposal_run_migration_adds_idempotency_key(
+    empty_migration_database: MigrationDatabase,
+) -> None:
+    command.upgrade(empty_migration_database.config, "head")
+
+    with _sync_engine(empty_migration_database) as engine:
+        inspector = inspect(engine)
+        columns = {
+            column["name"]: column
+            for column in inspector.get_columns("work_order_proposals")
+        }
+        uniques = {
+            unique["name"]
+            for unique in inspector.get_unique_constraints("work_order_proposals")
+        }
+        fks = {
+            fk["name"]: fk
+            for fk in inspector.get_foreign_keys("work_order_proposals")
+        }
+
+    assert columns["source_workflow_run_id"]["nullable"] is True
+    assert "uq_work_order_proposals_source_workflow_run_id" in uniques
+    source_fk = fks["fk_work_order_proposals_source_workflow_run_id_workflow_runs"]
+    assert source_fk["referred_table"] == "workflow_runs"
+    assert source_fk["options"].get("ondelete") == "RESTRICT"
+
+    def _insert_proposal(
+        connection,
+        complaint_id: object,
+        source_workflow_run_id: object | None,
+    ) -> None:
+        connection.execute(
+            text(
+                "INSERT INTO work_order_proposals "
+                "(complaint_id, source_workflow_run_id, title, "
+                "problem_description, proposed_scope, technical_findings, "
+                "priority, diagnostic_status, diagnostic_summary) "
+                "VALUES (:complaint_id, :source_workflow_run_id, "
+                "'Proposal', 'Problem', 'Scope', 'Findings', 'normal', "
+                "'ready', 'Summary')"
+            ),
+            {
+                "complaint_id": complaint_id,
+                "source_workflow_run_id": source_workflow_run_id,
+            },
+        )
+
+    with _sync_engine(empty_migration_database) as engine:
+        with engine.begin() as connection:
+            first_complaint = _insert_legacy_complaint(connection)
+            second_complaint = _insert_legacy_complaint(connection)
+            third_complaint = _insert_legacy_complaint(connection)
+            workflow_run_id = connection.execute(
+                text(
+                    "INSERT INTO workflow_runs (complaint_id) "
+                    "VALUES (:complaint_id) RETURNING id"
+                ),
+                {"complaint_id": first_complaint},
+            ).scalar_one()
+            _insert_proposal(connection, first_complaint, workflow_run_id)
+
+        with pytest.raises(IntegrityError), engine.begin() as connection:
+            _insert_proposal(connection, second_complaint, workflow_run_id)
+
+        with engine.begin() as connection:
+            _insert_proposal(connection, second_complaint, None)
+            _insert_proposal(connection, third_complaint, None)
+
+    command.downgrade(
+        empty_migration_database.config,
+        "0017_workflow_run_execution",
+    )
+
+    with _sync_engine(empty_migration_database) as engine:
+        columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("work_order_proposals")
+        }
+
+    assert "source_workflow_run_id" not in columns
+
+
 def test_downgrade_and_reupgrade(
     empty_migration_database: MigrationDatabase,
 ) -> None:
@@ -560,7 +664,7 @@ def test_clerk_identity_migration_downgrade_requires_password_hashes(
             )
         ).scalar_one()
 
-    assert version == "0016_outbox_events"
+    assert version == "0018_workflow_proposal_run"
     assert clerk_user_id == "user_clerk_test"
 
 
@@ -863,7 +967,7 @@ def test_complaint_history_downgrade_refuses_and_requires_archival(
             )
         ).all()
 
-    assert version == "0016_outbox_events"
+    assert version == "0018_workflow_proposal_run"
     assert count == 1
     assert archived[0].complaint_id == complaint_id
     assert archived[0].sequence_number == 1
@@ -1120,7 +1224,7 @@ def test_document_storage_migration_downgrade_refuses_storage_backed_rows(
             )
         ).scalar_one()
 
-    assert version == "0016_outbox_events"
+    assert version == "0018_workflow_proposal_run"
     assert storage_key == "aa/abcd.pdf"
 
     with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
@@ -1257,7 +1361,7 @@ def test_document_integrity_migration_checksum_format_and_recovery_column(
             text("SELECT version_num FROM alembic_version")
         ).scalar_one()
 
-    assert version == "0016_outbox_events"
+    assert version == "0018_workflow_proposal_run"
 
 def test_document_embeddings_migration_creates_pgvector_schema(
     empty_migration_database: MigrationDatabase,

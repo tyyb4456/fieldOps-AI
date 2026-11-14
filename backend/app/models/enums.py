@@ -80,6 +80,11 @@ class WorkflowRunStatus(str, PyEnum):
     FAILED = "failed"
 
 
+class WorkflowRunType(str, PyEnum):
+    DIAGNOSTIC_INVESTIGATION = "diagnostic_investigation"
+    WORK_ORDER_PROPOSAL = "work_order_proposal"
+
+
 class WorkOrderProposalStatus(str, PyEnum):
     PENDING_APPROVAL = "pending_approval"
     APPROVED = "approved"
@@ -146,5 +151,6 @@ __all__ = [
     "WorkOrderProposalStatus",
     "WorkOrderStatus",
     "WorkflowRunStatus",
+    "WorkflowRunType",
     "enum_type",
 ]

@@ -15,7 +15,10 @@ from app.api.dependencies.vector_index import get_vector_index
 from app.api.dependencies.work_order_proposals import (
     get_work_order_proposal_service,
 )
-from app.api.serializers import work_order_proposal_response
+from app.api.serializers import (
+    work_order_proposal_response,
+    workflow_run_accepted_response,
+)
 from app.core.exceptions import AppError
 from app.db.session import get_db_session
 from app.models.enums import WorkOrderProposalStatus
@@ -26,24 +29,20 @@ from app.schemas.work_orders.work_order_proposal import (
     WorkOrderProposalRejectRequest,
     WorkOrderProposalResponse,
 )
+from app.schemas.workflow_runs.workflow_run import WorkflowRunAcceptedResponse
 from app.services.assignments.assignments import is_active_assignment_conflict
-from app.services.diagnostics.diagnostics import (
-    DiagnosticAgentUnavailableError,
-    DiagnosticRetrievalUnavailableError,
-)
 from app.services.rag.vector_index import VectorIndex
 from app.services.work_orders.work_order_proposals import (
     InvalidProposalStateError,
-    ProposalAgentUnavailableError,
     ProposalAlreadyConvertedError,
     ProposalAlreadyPendingError,
-    ProposalGenerationError,
     ProposalNotEligibleError,
     ProposalStaleError,
     ProposalTechnicianNotEligibleError,
     WorkOrderProposalService,
     is_pending_proposal_conflict,
 )
+from app.services.workflows.scheduling import enqueue_work_order_proposal
 
 logger = logging.getLogger(__name__)
 
@@ -98,43 +97,11 @@ def _technician_not_eligible_error() -> AppError:
     )
 
 
-def _proposal_agent_unavailable_error() -> AppError:
-    return AppError(
-        "The work-order preparation agent is unavailable.",
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        code="proposal_agent_unavailable",
-    )
-
-
-def _proposal_generation_error() -> AppError:
-    return AppError(
-        "The work-order proposal did not pass validation.",
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        code="proposal_generation_failed",
-    )
-
-
-def _retrieval_unavailable_error() -> AppError:
-    return AppError(
-        "Knowledge base search is unavailable.",
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        code="retrieval_unavailable",
-    )
-
-
-def _diagnostic_agent_unavailable_error() -> AppError:
-    return AppError(
-        "The diagnostic agent is unavailable.",
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        code="diagnostic_agent_unavailable",
-    )
-
-
 @router.post(
     "/admin/complaints/{complaint_id}/work-order-proposals",
-    response_model=WorkOrderProposalResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Admin: prepare a reviewable work-order proposal",
+    response_model=WorkflowRunAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Admin: queue a reviewable work-order-proposal workflow",
 )
 async def generate_work_order_proposal(
     complaint_id: uuid.UUID,
@@ -144,56 +111,33 @@ async def generate_work_order_proposal(
     proposal_service: WorkOrderProposalService = Depends(
         get_work_order_proposal_service
     ),
-) -> WorkOrderProposalResponse:
+) -> WorkflowRunAcceptedResponse:
+    actor_id = current_user.id
     try:
-        proposal = await proposal_service.generate(
-            session=session,
+        workflow_run = await enqueue_work_order_proposal(
+            session,
             user=current_user,
-            vector_index=vector_index,
             complaint_id=complaint_id,
+            vector_index=vector_index,
+            proposal_service=proposal_service,
         )
-        await session.commit()
     except ProposalNotEligibleError as exc:
-        await session.rollback()
         raise _proposal_not_eligible_error() from exc
     except ProposalAlreadyPendingError as exc:
-        await session.rollback()
         raise _proposal_pending_error() from exc
     except ProposalAlreadyConvertedError as exc:
-        await session.rollback()
         raise _proposal_conflict_error() from exc
-    except ProposalStaleError as exc:
-        await session.rollback()
-        raise _proposal_stale_error() from exc
-    except ProposalAgentUnavailableError as exc:
-        await session.rollback()
-        raise _proposal_agent_unavailable_error() from exc
-    except ProposalGenerationError as exc:
-        await session.rollback()
-        raise _proposal_generation_error() from exc
-    except DiagnosticRetrievalUnavailableError as exc:
-        await session.rollback()
-        raise _retrieval_unavailable_error() from exc
-    except DiagnosticAgentUnavailableError as exc:
-        await session.rollback()
-        raise _diagnostic_agent_unavailable_error() from exc
-    except IntegrityError as exc:
-        await session.rollback()
-        if not is_pending_proposal_conflict(exc):
-            raise
-        raise _proposal_pending_error() from exc
 
-    await session.refresh(proposal)
     logger.info(
-        "Work-order proposal generated",
+        "Work-order proposal workflow queued",
         extra={
-            "event": "work_order_proposal_generated",
-            "actor_id": str(current_user.id),
-            "complaint_id": str(proposal.complaint_id),
-            "proposal_id": str(proposal.id),
+            "event": "work_order_proposal_queued",
+            "actor_id": str(actor_id),
+            "complaint_id": str(complaint_id),
+            "workflow_run_id": str(workflow_run.id),
         },
     )
-    return work_order_proposal_response(proposal)
+    return workflow_run_accepted_response(workflow_run)
 
 
 @router.get(

@@ -3,10 +3,13 @@ from __future__ import annotations
 from fastapi import Depends
 
 from app.api.dependencies.diagnostics import get_diagnostic_service
-from app.core.config import settings
-from app.services.agents.chat_model import get_chat_model
 from app.services.diagnostics.diagnostics import DiagnosticService
-from app.services.work_orders.work_order_proposals import WorkOrderProposalService
+from app.services.work_orders.work_order_proposals import (
+    WorkOrderProposalService,
+)
+from app.services.workflows.factories import (
+    build_work_order_proposal_service,
+)
 
 
 def get_work_order_proposal_service(
@@ -19,10 +22,6 @@ def get_work_order_proposal_service(
     diagnostic results.
     """
 
-    return WorkOrderProposalService(
+    return build_work_order_proposal_service(
         diagnostic_service=diagnostic_service,
-        chat_model_factory=get_chat_model,
-        max_tool_calls=settings.work_order_proposal_max_tool_calls,
-        max_model_calls=settings.work_order_proposal_max_model_calls,
-        technician_limit=settings.work_order_proposal_max_technicians,
     )

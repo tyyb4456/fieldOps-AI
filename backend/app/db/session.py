@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
@@ -64,3 +67,36 @@ async def verify_database_connection() -> bool:
 
 async def dispose_engine() -> None:
     await engine.dispose()
+
+
+async def _run_and_dispose[T](
+    coro: Coroutine[Any, Any, T],
+    engine_instance: AsyncEngine,
+) -> T:
+    try:
+        return await coro
+    finally:
+        try:
+            await engine_instance.dispose()
+        except Exception:
+            logger.exception(
+                "Failed to dispose the async database engine after a task",
+            )
+
+
+def run_async_task[T](
+    coro: Coroutine[Any, Any, T],
+    *,
+    engine: AsyncEngine,
+) -> T:
+    """Run one Celery task coroutine and release pooled connections in-loop.
+
+    Celery's synchronous task wrappers call ``asyncio.run()``, which creates
+    and closes a new event loop for every delivery. A module-global
+    ``AsyncEngine`` retains asyncpg connections that are bound to the loop that
+    opened them, so a connection returned to the pool by one task cannot be
+    reused by the next task's loop. Disposing the engine inside the same loop
+    guarantees the next delivery starts from an empty pool.
+    """
+
+    return asyncio.run(_run_and_dispose(coro, engine))

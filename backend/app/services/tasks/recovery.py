@@ -13,8 +13,14 @@ from app.models.enums import (
     BackgroundTaskStatus,
     IngestionStatus,
     OutboxEventStatus,
+    WorkflowRunStatus,
 )
 from app.models.outbox_event import OutboxEvent
+from app.models.work_order_proposal import WorkOrderProposal
+from app.models.workflow_run import WorkflowRun
+from app.services.tasks.execution import (
+    workflow_execution_stale_after_seconds,
+)
 
 RECONCILED_TASK_ERROR = (
     "The background task was never dispatched and was failed by operator "
@@ -26,6 +32,18 @@ RECONCILED_DOCUMENT_ERROR = (
 RECONCILED_OUTBOX_ERROR = (
     "The outbox event was failed by operator reconciliation because its "
     "background task was never dispatched."
+)
+RECONCILED_WORKFLOW_ERROR = (
+    "The workflow was never dispatched and was failed by operator "
+    "reconciliation. Start a new run."
+)
+RECONCILED_RUNNING_TASK_ERROR = (
+    "The running workflow task stopped without completing and was failed by "
+    "operator reconciliation."
+)
+RECONCILED_RUNNING_WORKFLOW_ERROR = (
+    "The running workflow stopped before completion and was failed by "
+    "operator reconciliation. Start a new run."
 )
 
 
@@ -207,6 +225,170 @@ async def fail_stale_pending_tasks(
                 document.ingestion_started_at = None
                 document.is_active = False
 
+        if (
+            task.resource_type == "workflow_run"
+            and task.resource_id is not None
+        ):
+            workflow_run = await session.get(
+                WorkflowRun,
+                task.resource_id,
+                with_for_update=True,
+            )
+            if (
+                workflow_run is not None
+                and workflow_run.status
+                in (
+                    WorkflowRunStatus.RUNNING,
+                    WorkflowRunStatus.PAUSED,
+                )
+            ):
+                workflow_run.status = WorkflowRunStatus.FAILED
+                workflow_run.current_step = "failed"
+                workflow_run.finished_at = reference
+                workflow_run.error_message = RECONCILED_WORKFLOW_ERROR
+
+        reconciled.append(task.id)
+
+    await session.commit()
+    return tuple(reconciled)
+
+
+async def fail_stale_running_tasks(
+    session: AsyncSession,
+    *,
+    stale_after_seconds: int,
+    now: datetime | None = None,
+) -> tuple[uuid.UUID, ...]:
+    """Fail stale RUNNING workflow tasks under an operator request.
+
+    A healthy worker is killed by the Celery hard time limit before the
+    minimum recovery age, and the linked workflow run and task rows are locked
+    so the decision is serialized with worker completion. The effective age is
+    never lower than the same safe claim window used by the worker, so this
+    procedure cannot race a task that is still within its execution window.
+
+    Tasks that are not workflow runs, including document ingestion, are left
+    untouched. The operator must still start a new workflow run after
+    recovery.
+
+    A proposal workflow may have committed its proposal in an earlier
+    transaction and then lost its worker before the run and task were
+    finalized. The ``source_workflow_run_id`` link proves the proposal belongs
+    to this run, so the run and task are reconciled to success with that
+    proposal instead of being failed. The unique constraint on the link
+    guarantees there is at most one proposal to recover.
+    """
+
+    reference = now or datetime.now(UTC)
+    effective_stale_after = max(
+        stale_after_seconds,
+        workflow_execution_stale_after_seconds(),
+    )
+    threshold = reference - timedelta(seconds=effective_stale_after)
+    candidates = (
+        await session.execute(
+            select(BackgroundTask.id, BackgroundTask.resource_id)
+            .where(
+                BackgroundTask.status == BackgroundTaskStatus.RUNNING,
+                BackgroundTask.resource_type == "workflow_run",
+                func.coalesce(
+                    BackgroundTask.started_at,
+                    BackgroundTask.created_at,
+                )
+                < threshold,
+            )
+            .order_by(
+                BackgroundTask.created_at.asc(),
+                BackgroundTask.id.asc(),
+            )
+        )
+    ).all()
+
+    reconciled: list[uuid.UUID] = []
+    for background_task_id, resource_id in candidates:
+        # Lock the workflow run before its task so this path has the same
+        # order as worker completion and cannot deadlock with it.
+        workflow_run: WorkflowRun | None = None
+        if resource_id is not None:
+            workflow_run = await session.get(
+                WorkflowRun,
+                resource_id,
+                with_for_update=True,
+                populate_existing=True,
+            )
+        task = await session.get(
+            BackgroundTask,
+            background_task_id,
+            with_for_update=True,
+            populate_existing=True,
+        )
+        if task is None or task.status is not BackgroundTaskStatus.RUNNING:
+            continue
+        started_at = task.started_at or task.created_at
+        if started_at >= threshold:
+            continue
+
+        recovered_proposal: WorkOrderProposal | None = None
+        if (
+            workflow_run is not None
+            and workflow_run.status
+            in (
+                WorkflowRunStatus.RUNNING,
+                WorkflowRunStatus.PAUSED,
+            )
+        ):
+            # Lock the proposal for the same run so an approval or rejection
+            # cannot change its status between this read and the commit.
+            recovered_proposal = (
+                await session.execute(
+                    select(WorkOrderProposal)
+                    .where(
+                        WorkOrderProposal.source_workflow_run_id
+                        == workflow_run.id
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one_or_none()
+
+        if (
+            workflow_run is not None
+            and workflow_run.status is WorkflowRunStatus.COMPLETED
+        ):
+            task.status = BackgroundTaskStatus.SUCCEEDED
+            task.finished_at = reference
+            task.error_message = None
+        elif (
+            workflow_run is not None
+            and workflow_run.status is WorkflowRunStatus.FAILED
+        ):
+            task.status = BackgroundTaskStatus.FAILED
+            task.finished_at = reference
+            task.error_message = (
+                workflow_run.error_message or RECONCILED_TASK_ERROR
+            )[:2000]
+        elif recovered_proposal is not None and workflow_run is not None:
+            task.status = BackgroundTaskStatus.SUCCEEDED
+            task.finished_at = reference
+            task.error_message = None
+            workflow_run.status = WorkflowRunStatus.COMPLETED
+            workflow_run.current_step = "completed"
+            workflow_run.finished_at = reference
+            workflow_run.error_message = None
+            workflow_run.result_payload = {
+                "proposal_id": str(recovered_proposal.id),
+                "status": recovered_proposal.status.value,
+            }
+        else:
+            task.status = BackgroundTaskStatus.FAILED
+            task.finished_at = reference
+            task.error_message = RECONCILED_RUNNING_TASK_ERROR
+            if workflow_run is not None:
+                workflow_run.status = WorkflowRunStatus.FAILED
+                workflow_run.current_step = "failed"
+                workflow_run.finished_at = reference
+                workflow_run.error_message = RECONCILED_RUNNING_WORKFLOW_ERROR
+
         reconciled.append(task.id)
 
     await session.commit()
@@ -216,8 +398,12 @@ async def fail_stale_pending_tasks(
 __all__ = [
     "RECONCILED_DOCUMENT_ERROR",
     "RECONCILED_OUTBOX_ERROR",
+    "RECONCILED_RUNNING_TASK_ERROR",
+    "RECONCILED_RUNNING_WORKFLOW_ERROR",
     "RECONCILED_TASK_ERROR",
+    "RECONCILED_WORKFLOW_ERROR",
     "ReconciliationReport",
     "fail_stale_pending_tasks",
+    "fail_stale_running_tasks",
     "inspect_background_tasks",
 ]

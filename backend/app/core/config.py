@@ -566,6 +566,11 @@ class Settings(BaseSettings):
         if self.db_echo:
             raise ValueError("DB_ECHO must be disabled in production")
 
+        if self.celery_task_always_eager:
+            raise ValueError(
+                "CELERY_TASK_ALWAYS_EAGER must be disabled in production"
+            )
+
         if self.db_require_tls:
             ssl_mode = str(url.query.get("ssl", "")).strip().lower()
             if ssl_mode not in SAFE_TLS_MODES:

@@ -328,3 +328,48 @@ async def test_workflow_run_lists_are_filterable(
         headers=bearer(admin_token),
     )
     assert missing_complaint.status_code == 404
+
+async def test_workflow_status_reads_are_operations_scoped(
+    api_client: Any,
+    migrated_db_session: AsyncSession,
+) -> None:
+    complaint, admin_token = await _seed_complaint_context(
+        migrated_db_session
+    )
+    created = await _create_run(api_client, complaint.id, admin_token)
+    workflow_run_id = created.json()["id"]
+
+    admin_read = await api_client.get(
+        f"/api/v1/workflows/{workflow_run_id}",
+        headers=bearer(admin_token),
+    )
+    assert admin_read.status_code == 200, admin_read.text
+    assert admin_read.json()["id"] == workflow_run_id
+
+    _, _, customer_token = await seed_customer(migrated_db_session)
+    forbidden = await api_client.get(
+        f"/api/v1/workflows/{workflow_run_id}",
+        headers=bearer(customer_token),
+    )
+    assert forbidden.status_code == 403
+
+    _, _, technician_token = await seed_technician(migrated_db_session)
+    hidden = await api_client.get(
+        f"/api/v1/workflows/{workflow_run_id}",
+        headers=bearer(technician_token),
+    )
+    assert hidden.status_code == 404
+
+
+async def test_workflow_status_unknown_run_returns_not_found(
+    api_client: Any,
+    migrated_db_session: AsyncSession,
+) -> None:
+    _, admin_token = await _seed_complaint_context(migrated_db_session)
+
+    response = await api_client.get(
+        "/api/v1/workflows/00000000-0000-0000-0000-000000000000",
+        headers=bearer(admin_token),
+    )
+
+    assert response.status_code == 404

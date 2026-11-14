@@ -11,7 +11,10 @@ from pydantic import (
     model_validator,
 )
 
-from app.models.enums import WorkflowRunStatus
+from app.models.enums import WorkflowRunStatus, WorkflowRunType
+from app.schemas.diagnostics.diagnostic import (
+    DiagnosticInvestigationResponse,
+)
 
 
 def _normalize_optional_text(value: str | None) -> str | None:
@@ -24,11 +27,33 @@ def _normalize_optional_text(value: str | None) -> str | None:
 class WorkflowRunResponse(BaseModel):
     id: uuid.UUID
     complaint_id: uuid.UUID
+    workflow_type: WorkflowRunType | None = None
     status: WorkflowRunStatus
     current_step: str | None = None
     started_at: datetime
     finished_at: datetime | None = None
     error_message: str | None = None
+
+
+class WorkflowRunAcceptedResponse(BaseModel):
+    workflow_run_id: uuid.UUID
+    complaint_id: uuid.UUID
+    workflow_type: WorkflowRunType
+    status: WorkflowRunStatus
+    current_step: str | None = None
+
+
+class WorkflowRunDetailResponse(BaseModel):
+    id: uuid.UUID
+    complaint_id: uuid.UUID
+    workflow_type: WorkflowRunType | None = None
+    status: WorkflowRunStatus
+    current_step: str | None = None
+    started_at: datetime
+    finished_at: datetime | None = None
+    error_message: str | None = None
+    diagnostic: DiagnosticInvestigationResponse | None = None
+    proposal_id: uuid.UUID | None = None
 
 
 class WorkflowRunListResponse(BaseModel):

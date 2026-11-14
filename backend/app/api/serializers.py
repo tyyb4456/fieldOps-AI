@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import uuid
+
 from app.models.complaint import Complaint
 from app.models.complaint_history import ComplaintHistory
 from app.models.completion_report import CompletionReport
 from app.models.customer import Customer
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
+from app.models.enums import WorkflowRunType
 from app.models.equipment import Equipment
 from app.models.service_record import ServiceRecord
 from app.models.technician import Technician
@@ -24,7 +27,10 @@ from app.schemas.complaints.complaint import (
     ComplaintResponse,
 )
 from app.schemas.customers.customer import CustomerProfileResponse
-from app.schemas.diagnostics.diagnostic import DiagnosticStatus
+from app.schemas.diagnostics.diagnostic import (
+    DiagnosticInvestigationResponse,
+    DiagnosticStatus,
+)
 from app.schemas.documents.document import (
     DocumentChunkResponse,
     DocumentResponse,
@@ -38,7 +44,11 @@ from app.schemas.work_orders.work_order_proposal import (
     TechnicianRecommendationResponse,
     WorkOrderProposalResponse,
 )
-from app.schemas.workflow_runs.workflow_run import WorkflowRunResponse
+from app.schemas.workflow_runs.workflow_run import (
+    WorkflowRunAcceptedResponse,
+    WorkflowRunDetailResponse,
+    WorkflowRunResponse,
+)
 
 
 def user_me_response(user: User) -> UserMeResponse:
@@ -232,11 +242,57 @@ def workflow_run_response(
     return WorkflowRunResponse(
         id=workflow_run.id,
         complaint_id=workflow_run.complaint_id,
+        workflow_type=workflow_run.workflow_type,
         status=workflow_run.status,
         current_step=workflow_run.current_step,
         started_at=workflow_run.started_at,
         finished_at=workflow_run.finished_at,
         error_message=workflow_run.error_message,
+    )
+
+
+def workflow_run_accepted_response(
+    workflow_run: WorkflowRun,
+) -> WorkflowRunAcceptedResponse:
+    if workflow_run.workflow_type is None:
+        raise ValueError("Accepted workflow runs require a workflow type")
+    return WorkflowRunAcceptedResponse(
+        workflow_run_id=workflow_run.id,
+        complaint_id=workflow_run.complaint_id,
+        workflow_type=workflow_run.workflow_type,
+        status=workflow_run.status,
+        current_step=workflow_run.current_step,
+    )
+
+
+def workflow_run_detail_response(
+    workflow_run: WorkflowRun,
+) -> WorkflowRunDetailResponse:
+    diagnostic = None
+    proposal_id = None
+    payload = workflow_run.result_payload
+    if isinstance(payload, dict):
+        if (
+            workflow_run.workflow_type
+            is WorkflowRunType.DIAGNOSTIC_INVESTIGATION
+        ):
+            diagnostic = DiagnosticInvestigationResponse.model_validate(
+                payload
+            )
+        raw_proposal_id = payload.get("proposal_id")
+        if raw_proposal_id is not None:
+            proposal_id = uuid.UUID(str(raw_proposal_id))
+    return WorkflowRunDetailResponse(
+        id=workflow_run.id,
+        complaint_id=workflow_run.complaint_id,
+        workflow_type=workflow_run.workflow_type,
+        status=workflow_run.status,
+        current_step=workflow_run.current_step,
+        started_at=workflow_run.started_at,
+        finished_at=workflow_run.finished_at,
+        error_message=workflow_run.error_message,
+        diagnostic=diagnostic,
+        proposal_id=proposal_id,
     )
 
 

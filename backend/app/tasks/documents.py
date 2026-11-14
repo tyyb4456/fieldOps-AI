@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 
 from app.celery_app import celery_app
 from app.core.config import settings
-from app.db.session import async_session_factory, engine
+from app.db.session import async_session_factory, engine, run_async_task
 from app.models.background_task import BackgroundTask
 from app.models.document import Document
 from app.models.enums import BackgroundTaskStatus, IngestionStatus
@@ -154,8 +153,9 @@ def ingest_document_task(
     document_uuid = uuid.UUID(document_id)
     task_uuid = uuid.UUID(background_task_id) if background_task_id else None
     try:
-        return asyncio.run(
-            run_document_ingestion(document_uuid, task_uuid)
+        return run_async_task(
+            run_document_ingestion(document_uuid, task_uuid),
+            engine=engine,
         )
     except Exception as exc:
         if (
@@ -166,8 +166,9 @@ def ingest_document_task(
                 exc=exc,
                 countdown=_retry_countdown(self.request.retries),
             )
-        asyncio.run(
-            _finalize_failed_task(document_uuid, task_uuid, exc)
+        run_async_task(
+            _finalize_failed_task(document_uuid, task_uuid, exc),
+            engine=engine,
         )
         raise
 

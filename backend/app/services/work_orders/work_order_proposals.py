@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -378,6 +379,32 @@ async def list_proposals(
     return list(result.scalars().all()), int(total or 0)
 
 
+@dataclass(frozen=True)
+class GenerationContext:
+    """Validated, currently eligible complaint context."""
+
+    complaint: Complaint
+    equipment: Equipment
+
+
+@dataclass(frozen=True)
+class ProposalPlanning:
+    """Deterministic skills and technician ranking for one complaint."""
+
+    required_skills: tuple[str, ...]
+    technician_result: Any
+
+
+@dataclass(frozen=True)
+class ProposalPreparation:
+    """Agent draft and deterministic recommendations ready to persist."""
+
+    required_skills: tuple[str, ...]
+    technician_result: Any
+    finalized: dict[str, Any]
+    snapshot: dict[str, Any]
+
+
 class WorkOrderProposalService:
     """Orchestrate proposal generation, human review and approved execution."""
 
@@ -397,6 +424,12 @@ class WorkOrderProposalService:
         self._max_model_calls = max_model_calls
         self._technician_limit = technician_limit
         self._agent_builder = agent_builder
+
+    @property
+    def diagnostic_service(self) -> DiagnosticService:
+        """Expose the shared diagnostic service for workflow composition."""
+
+        return self._diagnostic_service
 
     async def get(
         self,
@@ -425,18 +458,24 @@ class WorkOrderProposalService:
             offset=offset,
         )
 
-    async def generate(
+    async def validate_generation_context(
         self,
         *,
         session: AsyncSession,
         user: User,
-        vector_index: VectorIndex,
         complaint_id: uuid.UUID,
-    ) -> WorkOrderProposal:
-        # Phase A: all reads, retrieval, model calls and deterministic ranking
-        # happen with plain SELECTs only. No complaint row lock and no write is
-        # issued here, so no lock is held while waiting on the diagnostic or
-        # preparation provider.
+        workflow_run_id: uuid.UUID | None = None,
+    ) -> GenerationContext:
+        """Load and validate eligibility using plain reads only.
+
+        No complaint row lock is acquired here, so no lock is held while the
+        diagnostic or preparation provider is running.
+
+        When ``workflow_run_id`` is supplied and the only pending proposal was
+        created by that same run, the pending check is satisfied. This lets a
+        redelivered job reach its own persisted proposal instead of failing.
+        """
+
         complaint = await get_complaint_for_operations_user(
             session,
             user,
@@ -463,14 +502,19 @@ class WorkOrderProposalService:
                 "A work order already exists for this complaint."
             )
 
-        pending = await session.scalar(
-            select(WorkOrderProposal.id).where(
-                WorkOrderProposal.complaint_id == complaint.id,
-                WorkOrderProposal.status
-                == WorkOrderProposalStatus.PENDING_APPROVAL,
+        pending = (
+            await session.execute(
+                select(WorkOrderProposal).where(
+                    WorkOrderProposal.complaint_id == complaint.id,
+                    WorkOrderProposal.status
+                    == WorkOrderProposalStatus.PENDING_APPROVAL,
+                )
             )
-        )
-        if pending is not None:
+        ).scalar_one_or_none()
+        if pending is not None and not (
+            workflow_run_id is not None
+            and pending.source_workflow_run_id == workflow_run_id
+        ):
             raise ProposalAlreadyPendingError(
                 "A work order proposal is already pending review."
             )
@@ -481,20 +525,41 @@ class WorkOrderProposalService:
             complaint.equipment_id,
         )
         await session.refresh(equipment)
-
-        diagnosis = await self._diagnostic_service.investigate(
-            session=session,
-            user=user,
-            vector_index=vector_index,
-            complaint_id=complaint.id,
+        return GenerationContext(
+            complaint=complaint,
+            equipment=equipment,
         )
 
-        required_skills = required_skills_for_equipment(equipment)
+    async def rank_technicians(
+        self,
+        *,
+        session: AsyncSession,
+        context: GenerationContext,
+    ) -> ProposalPlanning:
+        """Compute required skills and deterministic technician ranking."""
+
+        required_skills = required_skills_for_equipment(context.equipment)
         technician_result = await recommend_technicians(
             session,
             required_skills=required_skills,
             limit=self._technician_limit,
         )
+        return ProposalPlanning(
+            required_skills=required_skills,
+            technician_result=technician_result,
+        )
+
+    async def draft_preparation(
+        self,
+        *,
+        context: GenerationContext,
+        diagnosis: Any,
+        planning: ProposalPlanning,
+    ) -> ProposalPreparation:
+        """Run the bounded preparation agent and validate its draft."""
+
+        required_skills = planning.required_skills
+        technician_result = planning.technician_result
 
         try:
             chat_model = self._chat_model_factory()
@@ -509,15 +574,15 @@ class WorkOrderProposalService:
             max_tool_calls=self._max_tool_calls,
             max_model_calls=self._max_model_calls,
         )
-        context = PreparationContext(
-            complaint=complaint,
-            equipment=equipment,
+        agent_context = PreparationContext(
+            complaint=context.complaint,
+            equipment=context.equipment,
             diagnosis=diagnosis,
             required_skills=required_skills,
         )
         messages = build_preparation_message(
-            complaint=complaint,
-            equipment=equipment,
+            complaint=context.complaint,
+            equipment=context.equipment,
             diagnosis=diagnosis,
             required_skills=required_skills,
         )
@@ -525,7 +590,7 @@ class WorkOrderProposalService:
         try:
             state = await agent.ainvoke(
                 {"messages": messages},
-                context=context,
+                context=agent_context,
             )
         except Exception as exc:
             logger.warning(
@@ -553,23 +618,97 @@ class WorkOrderProposalService:
             recommendation_warnings=technician_result.warnings,
         )
         snapshot = complaint_context_snapshot(
-            complaint=complaint,
-            equipment=equipment,
+            complaint=context.complaint,
+            equipment=context.equipment,
             diagnosis=diagnosis,
             required_skills=required_skills,
             technician_result=technician_result,
         )
+        return ProposalPreparation(
+            required_skills=required_skills,
+            technician_result=technician_result,
+            finalized=finalized,
+            snapshot=snapshot,
+        )
 
-        # Phase B: acquire the complaint row lock, revalidate against current
-        # database state and persist the proposal in one short transaction.
+    async def prepare_generation(
+        self,
+        *,
+        session: AsyncSession,
+        context: GenerationContext,
+        diagnosis: Any,
+    ) -> ProposalPreparation:
+        """Compose deterministic ranking and the bounded preparation agent."""
+
+        planning = await self.rank_technicians(
+            session=session,
+            context=context,
+        )
+        return await self.draft_preparation(
+            context=context,
+            diagnosis=diagnosis,
+            planning=planning,
+        )
+
+    async def persist_prepared_proposal(
+        self,
+        *,
+        session: AsyncSession,
+        user: User,
+        context: GenerationContext,
+        diagnosis: Any,
+        preparation: ProposalPreparation,
+        workflow_run_id: uuid.UUID | None = None,
+    ) -> WorkOrderProposal:
+        """Persist a prepared proposal in one short, locked transaction."""
+
         return await self._persist_proposal(
             session=session,
             user=user,
-            complaint_id=complaint.id,
-            finalized=finalized,
+            complaint_id=context.complaint.id,
+            finalized=preparation.finalized,
             diagnosis=diagnosis,
-            snapshot=snapshot,
-            technician_result=technician_result,
+            snapshot=preparation.snapshot,
+            technician_result=preparation.technician_result,
+            workflow_run_id=workflow_run_id,
+        )
+
+    async def generate(
+        self,
+        *,
+        session: AsyncSession,
+        user: User,
+        vector_index: VectorIndex,
+        complaint_id: uuid.UUID,
+    ) -> WorkOrderProposal:
+        """Run full proposal generation synchronously.
+
+        Retained for service-level tests and non-graph callers. Background
+        execution uses the LangGraph workflow, which invokes the same phases.
+        """
+
+        context = await self.validate_generation_context(
+            session=session,
+            user=user,
+            complaint_id=complaint_id,
+        )
+        diagnosis = await self._diagnostic_service.investigate(
+            session=session,
+            user=user,
+            vector_index=vector_index,
+            complaint_id=context.complaint.id,
+        )
+        preparation = await self.prepare_generation(
+            session=session,
+            context=context,
+            diagnosis=diagnosis,
+        )
+        return await self.persist_prepared_proposal(
+            session=session,
+            user=user,
+            context=context,
+            diagnosis=diagnosis,
+            preparation=preparation,
         )
 
     async def _persist_proposal(
@@ -582,12 +721,32 @@ class WorkOrderProposalService:
         diagnosis: Any,
         snapshot: dict[str, Any],
         technician_result: Any,
+        workflow_run_id: uuid.UUID | None = None,
     ) -> WorkOrderProposal:
         await get_complaint_for_operations_user(
             session,
             user,
             complaint_id,
         )
+
+        if workflow_run_id is not None:
+            existing = await session.scalar(
+                select(WorkOrderProposal).where(
+                    WorkOrderProposal.source_workflow_run_id
+                    == workflow_run_id
+                )
+            )
+            if existing is not None:
+                logger.info(
+                    "Recovering proposal persisted by this workflow run",
+                    extra={
+                        "event": "workflow_proposal_recovered",
+                        "workflow_run_id": str(workflow_run_id),
+                        "proposal_id": str(existing.id),
+                    },
+                )
+                return existing
+
         complaint = await _lock_complaint(session, complaint_id)
 
         if complaint.status not in COMPLAINT_STATUSES_ELIGIBLE_FOR_PROPOSAL:
@@ -616,14 +775,29 @@ class WorkOrderProposalService:
                 "A work order already exists for this complaint."
             )
 
-        pending = await session.scalar(
-            select(WorkOrderProposal.id).where(
-                WorkOrderProposal.complaint_id == complaint.id,
-                WorkOrderProposal.status
-                == WorkOrderProposalStatus.PENDING_APPROVAL,
+        pending = (
+            await session.execute(
+                select(WorkOrderProposal).where(
+                    WorkOrderProposal.complaint_id == complaint.id,
+                    WorkOrderProposal.status
+                    == WorkOrderProposalStatus.PENDING_APPROVAL,
+                )
             )
-        )
+        ).scalar_one_or_none()
         if pending is not None:
+            if (
+                workflow_run_id is not None
+                and pending.source_workflow_run_id == workflow_run_id
+            ):
+                logger.info(
+                    "Recovering concurrently persisted proposal for this run",
+                    extra={
+                        "event": "workflow_proposal_recovered",
+                        "workflow_run_id": str(workflow_run_id),
+                        "proposal_id": str(pending.id),
+                    },
+                )
+                return pending
             raise ProposalAlreadyPendingError(
                 "A work order proposal is already pending review."
             )
@@ -631,6 +805,7 @@ class WorkOrderProposalService:
         proposal = WorkOrderProposal(
             complaint_id=complaint.id,
             status=WorkOrderProposalStatus.PENDING_APPROVAL,
+            source_workflow_run_id=workflow_run_id,
             context_snapshot=snapshot,
             title=finalized["title"],
             problem_description=finalized["problem_description"],
@@ -875,12 +1050,15 @@ def log_proposal_event(
 
 
 __all__ = [
+    "GenerationContext",
     "InvalidProposalStateError",
     "ProposalAgentUnavailableError",
     "ProposalAlreadyConvertedError",
     "ProposalAlreadyPendingError",
     "ProposalGenerationError",
     "ProposalNotEligibleError",
+    "ProposalPlanning",
+    "ProposalPreparation",
     "ProposalStaleError",
     "ProposalTechnicianNotEligibleError",
     "WorkOrderProposalError",

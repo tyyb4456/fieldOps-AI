@@ -58,6 +58,10 @@ class WorkOrderProposal(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
             "resulting_assignment_id",
             name="uq_work_order_proposals_resulting_assignment_id",
         ),
+        UniqueConstraint(
+            "source_workflow_run_id",
+            name="uq_work_order_proposals_source_workflow_run_id",
+        ),
         Index("ix_work_order_proposals_complaint_id", "complaint_id"),
         Index("ix_work_order_proposals_status", "status"),
         Index("ix_work_order_proposals_created_by_id", "created_by_id"),
@@ -82,6 +86,14 @@ class WorkOrderProposal(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
         nullable=False,
         default=WorkOrderProposalStatus.PENDING_APPROVAL,
         server_default=WorkOrderProposalStatus.PENDING_APPROVAL.value,
+    )
+
+    # Originating async workflow run. Null for proposals created through the
+    # synchronous service path. Unique so a redelivered workflow run can only
+    # ever recover its own proposal.
+    source_workflow_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("workflow_runs.id", ondelete="RESTRICT"),
+        nullable=True,
     )
 
     # Database facts captured when the proposal was generated.

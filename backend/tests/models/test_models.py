@@ -224,6 +224,8 @@ def test_jsonb_columns_are_declared() -> None:
         (DocumentChunk.__tablename__, "metadata"),
         (DocumentChunkEmbedding.__tablename__, "langchain_metadata"),
         (OutboxEvent.__tablename__, "payload"),
+        (WorkflowRun.__tablename__, "input_payload"),
+        (WorkflowRun.__tablename__, "result_payload"),
     }
 
     for table_name, column_name in jsonb_columns:

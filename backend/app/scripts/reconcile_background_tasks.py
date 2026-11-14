@@ -9,11 +9,17 @@ from app.core.config import settings
 from app.db.session import async_session_factory, dispose_engine
 from app.services.tasks.recovery import (
     fail_stale_pending_tasks,
+    fail_stale_running_tasks,
     inspect_background_tasks,
 )
 
 
-async def reconcile(*, stale_after_seconds: int, fail_stale: bool) -> int:
+async def reconcile(
+    *,
+    stale_after_seconds: int,
+    fail_stale: bool,
+    fail_stale_running: bool = False,
+) -> int:
     async with async_session_factory() as session:
         report = await inspect_background_tasks(
             session,
@@ -42,6 +48,14 @@ async def reconcile(*, stale_after_seconds: int, fail_stale: bool) -> int:
             for task_id in reconciled:
                 print(f"reconciled_task id={task_id}")
 
+        if fail_stale_running:
+            reconciled_running = await fail_stale_running_tasks(
+                session,
+                stale_after_seconds=stale_after_seconds,
+            )
+            for task_id in reconciled_running:
+                print(f"reconciled_running_task id={task_id}")
+
     await dispose_engine()
     return 1 if report.failed_outbox_events else 0
 
@@ -52,8 +66,11 @@ def main() -> int:
         description=(
             "Inspect background task, outbox and document ingestion state. Use "
             "--fail-stale to fail stale PENDING tasks that no worker started. "
-            "Stale RUNNING tasks are reported only and require manual review. "
-            "Run dispatch_outbox.py to publish pending outbox events."
+            "Use --fail-stale-running to finalize stale RUNNING workflow "
+            "tasks after the safe execution window. A run whose proposal was "
+            "already persisted is completed; any other run is failed. Document "
+            "ingestion tasks are only reported. Run dispatch_outbox.py to "
+            "publish pending outbox events."
         )
     )
     parser.add_argument(
@@ -68,7 +85,16 @@ def main() -> int:
     parser.add_argument(
         "--fail-stale",
         action="store_true",
-        help="Fail stale PENDING tasks. RUNNING tasks are never modified.",
+        help="Fail stale PENDING tasks.",
+    )
+    parser.add_argument(
+        "--fail-stale-running",
+        action="store_true",
+        help=(
+            "Finalize stale RUNNING workflow tasks after the safe execution "
+            "window. Persisted proposals complete their run; other runs fail. "
+            "Document ingestion tasks are not modified."
+        ),
     )
     arguments = parser.parse_args()
     if arguments.stale_after_seconds < 1:
@@ -77,6 +103,7 @@ def main() -> int:
         reconcile(
             stale_after_seconds=arguments.stale_after_seconds,
             fail_stale=arguments.fail_stale,
+            fail_stale_running=arguments.fail_stale_running,
         )
     )
 

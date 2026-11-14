@@ -84,6 +84,33 @@ class StubDiagnosticService:
         assert self.result is not None
         return self.result
 
+    async def prepare(self, **kwargs: Any) -> Any:
+        complaint = await get_complaint_for_operations_user(
+            kwargs["session"],
+            kwargs["user"],
+            kwargs["complaint_id"],
+        )
+        return SimpleNamespace(
+            complaint=complaint,
+            equipment=None,
+            missing_information=(),
+        )
+
+    async def run_agent(self, **kwargs: Any) -> Any:
+        self.calls.append(
+            {
+                "complaint_id": kwargs["preparation"].complaint.id,
+                "focus": kwargs.get("focus"),
+            }
+        )
+        if self.error is not None:
+            raise self.error
+        return SimpleNamespace()
+
+    def finalize(self, **kwargs: Any) -> DiagnosticResult:
+        assert self.result is not None
+        return self.result
+
 
 class FakeAgent:
     def __init__(self, diagnosis: ModelDiagnosis) -> None:
@@ -303,8 +330,18 @@ async def test_investigate_returns_structured_result(
         json={"complaint_id": str(complaint.id), "focus": "Check E-05"},
     )
 
-    assert response.status_code == 200, response.text
-    body = response.json()
+    assert response.status_code == 202, response.text
+    accepted = response.json()
+    assert accepted["workflow_type"] == "diagnostic_investigation"
+
+    status_response = await api_client.get(
+        f"/api/v1/workflows/{accepted['workflow_run_id']}",
+        headers=bearer(admin_token),
+    )
+    assert status_response.status_code == 200, status_response.text
+    run = status_response.json()
+    assert run["status"] == "completed"
+    body = run["diagnostic"]
     assert body["complaint_id"] == str(complaint.id)
     assert body["status"] == "diagnosed"
     assert body["summary"] == "The manual supports checking the DC input."
@@ -361,9 +398,16 @@ async def test_investigate_maps_retrieval_failure_to_503(
         json={"complaint_id": str(complaint.id)},
     )
 
-    assert response.status_code == 503
-    assert response.json()["error"]["code"] == "retrieval_unavailable"
-    assert "store down" not in response.text
+    assert response.status_code == 202
+    accepted = response.json()
+    status_response = await api_client.get(
+        f"/api/v1/workflows/{accepted['workflow_run_id']}",
+        headers=bearer(admin_token),
+    )
+    run = status_response.json()
+    assert run["status"] == "failed"
+    assert run["error_message"] == "Knowledge base search is unavailable."
+    assert "store down" not in status_response.text
 
 
 async def test_investigate_maps_agent_failure_to_503(
@@ -383,9 +427,16 @@ async def test_investigate_maps_agent_failure_to_503(
         json={"complaint_id": str(complaint.id)},
     )
 
-    assert response.status_code == 503
-    assert response.json()["error"]["code"] == "diagnostic_agent_unavailable"
-    assert "sk-secret-123" not in response.text
+    assert response.status_code == 202
+    accepted = response.json()
+    status_response = await api_client.get(
+        f"/api/v1/workflows/{accepted['workflow_run_id']}",
+        headers=bearer(admin_token),
+    )
+    run = status_response.json()
+    assert run["status"] == "failed"
+    assert run["error_message"] == "The diagnostic agent is unavailable."
+    assert "sk-secret-123" not in status_response.text
 
 
 async def test_investigate_rejects_invalid_payloads(
@@ -1205,9 +1256,16 @@ async def test_investigate_maps_limit_termination_to_stable_503(
         json={"complaint_id": str(complaint.id), "focus": termination},
     )
 
-    assert response.status_code == 503
-    assert response.json()["error"]["code"] == "diagnostic_agent_unavailable"
-    assert "limit" not in response.text.casefold()
+    assert response.status_code == 202
+    accepted = response.json()
+    status_response = await api_client.get(
+        f"/api/v1/workflows/{accepted['workflow_run_id']}",
+        headers=bearer(admin_token),
+    )
+    run = status_response.json()
+    assert run["status"] == "failed"
+    assert run["error_message"] == "The diagnostic agent is unavailable."
+    assert "limit" not in status_response.text.casefold()
     assert model.invocation_count == 1
 
 

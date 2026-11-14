@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from app.core.config import settings
-from app.db.session import async_session_factory
-from app.services.agents.chat_model import get_chat_model
 from app.services.diagnostics.diagnostics import DiagnosticService
+from app.services.workflows.factories import build_diagnostic_service
 
 
 def get_diagnostic_service() -> DiagnosticService:
@@ -14,12 +12,4 @@ def get_diagnostic_service() -> DiagnosticService:
     override this dependency without touching global state.
     """
 
-    return DiagnosticService(
-        chat_model_factory=get_chat_model,
-        min_similarity=settings.answer_min_similarity,
-        knowledge_top_k=settings.diagnostic_knowledge_top_k,
-        max_service_records=settings.diagnostic_max_service_records,
-        max_tool_calls=settings.diagnostic_max_tool_calls,
-        max_model_calls=settings.diagnostic_max_model_calls,
-        session_factory=async_session_factory,
-    )
+    return build_diagnostic_service()

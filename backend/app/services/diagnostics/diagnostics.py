@@ -84,6 +84,23 @@ class DiagnosticCheck:
 
 
 @dataclass(frozen=True)
+class DiagnosticPreparation:
+    """Authoritative complaint context loaded before any model call."""
+
+    complaint: Complaint
+    equipment: Equipment | None
+    missing_information: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DiagnosticAgentRun:
+    """Raw model diagnosis plus the chunks actually returned by tools."""
+
+    diagnosis: ModelDiagnosis
+    collector: DiagnosticCollector
+
+
+@dataclass(frozen=True)
 class DiagnosticResult:
     complaint_id: uuid.UUID
     status: DiagnosticStatus
@@ -356,15 +373,15 @@ class DiagnosticService:
         self._agent_builder = agent_builder
         self._session_factory = session_factory or async_session_factory
 
-    async def investigate(
+    async def prepare(
         self,
         *,
         session: AsyncSession,
         user: User,
-        vector_index: VectorIndex,
         complaint_id: uuid.UUID,
-        focus: str | None = None,
-    ) -> DiagnosticResult:
+    ) -> DiagnosticPreparation:
+        """Load and authorize the complaint context without calling the model."""
+
         if not (is_admin(user) or is_technician(user)):
             raise AccessDeniedError("Complaint not found")
 
@@ -382,16 +399,34 @@ class DiagnosticService:
                 complaint.equipment_id,
             )
 
-        missing_information = compute_missing_information(complaint, equipment)
+        return DiagnosticPreparation(
+            complaint=complaint,
+            equipment=equipment,
+            missing_information=compute_missing_information(
+                complaint,
+                equipment,
+            ),
+        )
+
+    async def run_agent(
+        self,
+        *,
+        user: User,
+        vector_index: VectorIndex,
+        preparation: DiagnosticPreparation,
+        focus: str | None = None,
+    ) -> DiagnosticAgentRun:
+        """Run the bounded agent against already-authorized context."""
+
         normalized_focus = (focus or "").strip()[:2000] or None
         collector = DiagnosticCollector()
         context = DiagnosticContext(
             session_factory=self._session_factory,
             user=user,
             vector_index=vector_index,
-            complaint=complaint,
-            equipment=equipment,
-            missing_information=missing_information,
+            complaint=preparation.complaint,
+            equipment=preparation.equipment,
+            missing_information=preparation.missing_information,
             collector=collector,
             knowledge_top_k=self._knowledge_top_k,
             min_similarity=self._min_similarity,
@@ -412,9 +447,9 @@ class DiagnosticService:
             max_model_calls=self._max_model_calls,
         )
         messages = build_investigation_message(
-            complaint,
-            equipment,
-            missing_information,
+            preparation.complaint,
+            preparation.equipment,
+            preparation.missing_information,
             normalized_focus,
         )
 
@@ -431,7 +466,7 @@ class DiagnosticService:
                 )
                 raise DiagnosticRetrievalUnavailableError(
                     "Knowledge base search is unavailable."
-                ) from exc
+                ) from context.retrieval_error
             logger.warning(
                 "Diagnostic agent invocation failed",
                 extra={
@@ -453,7 +488,7 @@ class DiagnosticService:
             )
             raise DiagnosticRetrievalUnavailableError(
                 "Knowledge base search is unavailable."
-            )
+            ) from context.retrieval_error
 
         diagnosis = _extract_diagnosis(state)
         if not diagnosis.summary.strip():
@@ -461,9 +496,50 @@ class DiagnosticService:
                 "The diagnostic agent returned an empty summary."
             )
 
-        return finalize_diagnosis(
-            diagnosis,
-            complaint_id=complaint.id,
+        return DiagnosticAgentRun(
+            diagnosis=diagnosis,
             collector=collector,
-            deterministic_missing_information=missing_information,
         )
+
+    def finalize(
+        self,
+        *,
+        run: DiagnosticAgentRun,
+        preparation: DiagnosticPreparation,
+    ) -> DiagnosticResult:
+        """Validate model output against evidence collected by the tools."""
+
+        return finalize_diagnosis(
+            run.diagnosis,
+            complaint_id=preparation.complaint.id,
+            collector=run.collector,
+            deterministic_missing_information=preparation.missing_information,
+        )
+
+    async def investigate(
+        self,
+        *,
+        session: AsyncSession,
+        user: User,
+        vector_index: VectorIndex,
+        complaint_id: uuid.UUID,
+        focus: str | None = None,
+    ) -> DiagnosticResult:
+        """Run the full investigation synchronously.
+
+        Retained for service-level tests and non-graph callers. Background
+        execution uses the LangGraph workflow, which invokes the same phases.
+        """
+
+        preparation = await self.prepare(
+            session=session,
+            user=user,
+            complaint_id=complaint_id,
+        )
+        run = await self.run_agent(
+            user=user,
+            vector_index=vector_index,
+            preparation=preparation,
+            focus=focus,
+        )
+        return self.finalize(run=run, preparation=preparation)

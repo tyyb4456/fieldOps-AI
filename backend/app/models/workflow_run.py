@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    func,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, UUIDPrimaryKeyMixin
-from app.models.enums import WorkflowRunStatus, enum_type
+from app.models.enums import WorkflowRunStatus, WorkflowRunType, enum_type
 
 if TYPE_CHECKING:
     from app.models.complaint import Complaint
@@ -19,11 +28,31 @@ class WorkflowRun(UUIDPrimaryKeyMixin, Base):
     __table_args__ = (
         Index("ix_workflow_runs_complaint_id", "complaint_id"),
         Index("ix_workflow_runs_status", "status"),
+        Index("ix_workflow_runs_workflow_type", "workflow_type"),
+        Index("ix_workflow_runs_requested_by_id", "requested_by_id"),
     )
 
     complaint_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("complaints.id", ondelete="RESTRICT"),
         nullable=False,
+    )
+    workflow_type: Mapped[WorkflowRunType | None] = mapped_column(
+        enum_type(WorkflowRunType, "workflow_run_type", length=40),
+        nullable=True,
+    )
+    requested_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    input_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+    result_payload: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
     )
     status: Mapped[WorkflowRunStatus] = mapped_column(
         enum_type(WorkflowRunStatus, "workflow_run_status", length=20),

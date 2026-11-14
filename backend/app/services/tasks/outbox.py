@@ -41,9 +41,17 @@ def _publish_outbox_event(event: OutboxEvent) -> None:
     from app.celery_app import celery_app
 
     payload = event.payload
+    args = payload.get("args")
+    if args is None:
+        # Backwards compatibility for document-ingestion events created before
+        # the generic workflow dispatcher was introduced.
+        args = [
+            str(payload["document_id"]),
+            str(payload["background_task_id"]),
+        ]
     celery_app.send_task(
         event.event_type,
-        args=[str(payload["document_id"]), str(payload["background_task_id"])],
+        args=list(args),
         task_id=str(payload["celery_task_id"]),
     )
 

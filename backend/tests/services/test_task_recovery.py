@@ -19,15 +19,27 @@ from app.models.enums import (
     BackgroundTaskStatus,
     IngestionStatus,
     OutboxEventStatus,
+    WorkflowRunStatus,
+    WorkflowRunType,
 )
 from app.models.outbox_event import OutboxEvent
+from app.models.workflow_run import WorkflowRun
 from app.services.tasks import outbox
 from app.services.tasks.recovery import (
     RECONCILED_DOCUMENT_ERROR,
     RECONCILED_OUTBOX_ERROR,
+    RECONCILED_RUNNING_TASK_ERROR,
+    RECONCILED_RUNNING_WORKFLOW_ERROR,
     RECONCILED_TASK_ERROR,
     fail_stale_pending_tasks,
+    fail_stale_running_tasks,
     inspect_background_tasks,
+)
+from tests.support import (
+    seed_admin,
+    seed_complaint,
+    seed_customer,
+    seed_equipment,
 )
 
 
@@ -354,3 +366,128 @@ async def test_reconciliation_skips_task_when_dispatch_holds_outbox_lock(
             assert verified_event.status is OutboxEventStatus.PUBLISHED
     finally:
         await engine.dispose()
+
+
+async def _seed_workflow_run(
+    session: AsyncSession,
+    *,
+    status: WorkflowRunStatus,
+) -> WorkflowRun:
+    admin, _ = await seed_admin(session)
+    _, customer, _ = await seed_customer(session)
+    equipment = await seed_equipment(session, customer)
+    complaint = await seed_complaint(session, customer, equipment=equipment)
+    run = WorkflowRun(
+        complaint_id=complaint.id,
+        workflow_type=WorkflowRunType.DIAGNOSTIC_INVESTIGATION,
+        requested_by_id=admin.id,
+        status=status,
+        current_step="investigating",
+    )
+    session.add(run)
+    await session.flush()
+    return run
+
+
+async def _seed_workflow_task(
+    session: AsyncSession,
+    run: WorkflowRun,
+    *,
+    started_at: datetime,
+    status: BackgroundTaskStatus = BackgroundTaskStatus.RUNNING,
+) -> BackgroundTask:
+    task = BackgroundTask(
+        task_name="workflows.diagnostic_investigation",
+        celery_task_id=str(uuid.uuid4()),
+        status=status,
+        resource_type="workflow_run",
+        resource_id=run.id,
+        attempts=1,
+        started_at=started_at,
+    )
+    task.created_at = started_at
+    session.add(task)
+    await session.commit()
+    return task
+
+
+async def test_fail_stale_running_workflow_task_fails_task_and_run(
+    migrated_db_session: AsyncSession,
+) -> None:
+    stale = datetime.now(UTC) - timedelta(hours=2)
+    run = await _seed_workflow_run(
+        migrated_db_session,
+        status=WorkflowRunStatus.RUNNING,
+    )
+    task = await _seed_workflow_task(
+        migrated_db_session,
+        run,
+        started_at=stale,
+    )
+
+    reconciled = await fail_stale_running_tasks(
+        migrated_db_session,
+        stale_after_seconds=3600,
+    )
+
+    assert reconciled == (task.id,)
+    await migrated_db_session.refresh(task)
+    await migrated_db_session.refresh(run)
+    assert task.status is BackgroundTaskStatus.FAILED
+    assert task.error_message == RECONCILED_RUNNING_TASK_ERROR
+    assert task.finished_at is not None
+    assert run.status is WorkflowRunStatus.FAILED
+    assert run.current_step == "failed"
+    assert run.error_message == RECONCILED_RUNNING_WORKFLOW_ERROR
+    assert run.finished_at is not None
+
+
+async def test_fail_stale_running_workflow_task_skips_active_claims(
+    migrated_db_session: AsyncSession,
+) -> None:
+    run = await _seed_workflow_run(
+        migrated_db_session,
+        status=WorkflowRunStatus.RUNNING,
+    )
+    task = await _seed_workflow_task(
+        migrated_db_session,
+        run,
+        started_at=datetime.now(UTC),
+    )
+
+    reconciled = await fail_stale_running_tasks(
+        migrated_db_session,
+        stale_after_seconds=1,
+    )
+
+    assert reconciled == ()
+    await migrated_db_session.refresh(task)
+    await migrated_db_session.refresh(run)
+    assert task.status is BackgroundTaskStatus.RUNNING
+    assert run.status is WorkflowRunStatus.RUNNING
+
+
+async def test_fail_stale_running_workflow_task_reconciles_completed_run(
+    migrated_db_session: AsyncSession,
+) -> None:
+    stale = datetime.now(UTC) - timedelta(hours=2)
+    run = await _seed_workflow_run(
+        migrated_db_session,
+        status=WorkflowRunStatus.COMPLETED,
+    )
+    task = await _seed_workflow_task(
+        migrated_db_session,
+        run,
+        started_at=stale,
+    )
+
+    reconciled = await fail_stale_running_tasks(
+        migrated_db_session,
+        stale_after_seconds=3600,
+    )
+
+    assert reconciled == (task.id,)
+    await migrated_db_session.refresh(task)
+    assert task.status is BackgroundTaskStatus.SUCCEEDED
+    assert task.finished_at is not None
+    assert task.error_message is None

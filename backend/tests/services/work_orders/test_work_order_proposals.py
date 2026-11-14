@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import uuid
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -43,6 +44,7 @@ from app.services.diagnostics.diagnostics import (
     DiagnosticCheck,
     DiagnosticResult,
     DiagnosticService,
+    get_complaint_for_operations_user,
 )
 from app.services.rag.knowledge_answer import Citation
 from app.services.work_orders.work_order_proposals import (
@@ -69,6 +71,30 @@ class StubDiagnosticService:
 
     async def investigate(self, **kwargs: Any) -> DiagnosticResult:
         self.calls.append(kwargs)
+        return self.result
+
+    async def prepare(self, **kwargs: Any) -> Any:
+        complaint = await get_complaint_for_operations_user(
+            kwargs["session"],
+            kwargs["user"],
+            kwargs["complaint_id"],
+        )
+        return SimpleNamespace(
+            complaint=complaint,
+            equipment=None,
+            missing_information=(),
+        )
+
+    async def run_agent(self, **kwargs: Any) -> Any:
+        self.calls.append(
+            {
+                "complaint_id": kwargs["preparation"].complaint.id,
+                "focus": kwargs.get("focus"),
+            }
+        )
+        return SimpleNamespace()
+
+    def finalize(self, **kwargs: Any) -> DiagnosticResult:
         return self.result
 
 
@@ -498,11 +524,19 @@ async def test_api_generate_approve_and_role_boundaries(
         f"/api/v1/admin/complaints/{complaint.id}/work-order-proposals",
         headers=bearer(admin_token),
     )
-    assert generate_response.status_code == 201
-    generated = generate_response.json()
-    assert generated["status"] == "pending_approval"
-    assert generated["created_by_id"] == str(admin.id)
-    proposal_id = generated["id"]
+    assert generate_response.status_code == 202
+    accepted = generate_response.json()
+    assert accepted["workflow_type"] == "work_order_proposal"
+
+    status_response = await api_client.get(
+        f"/api/v1/workflows/{accepted['workflow_run_id']}",
+        headers=bearer(admin_token),
+    )
+    assert status_response.status_code == 200, status_response.text
+    run = status_response.json()
+    assert run["status"] == "completed"
+    proposal_id = run["proposal_id"]
+    assert proposal_id is not None
 
     forbidden_approve = await api_client.post(
         f"/api/v1/admin/work-order-proposals/{proposal_id}/approve",
@@ -527,6 +561,7 @@ async def test_api_generate_approve_and_role_boundaries(
         headers=bearer(admin_token),
     )
     assert read_response.status_code == 200
+    assert read_response.json()["created_by_id"] == str(admin.id)
 
     forbidden_read = await api_client.get(
         f"/api/v1/admin/work-order-proposals/{proposal_id}",
@@ -993,13 +1028,34 @@ async def test_concurrent_generation_creates_one_pending_proposal(
         generate_proposal(),
     )
     statuses = sorted([first.status_code, second.status_code])
-    assert statuses == [201, 409]
-    losing = first if first.status_code == 409 else second
-    assert losing.json()["error"]["code"] in {
-        "proposal_already_pending",
-        "proposal_conflict",
-        "proposal_stale",
-    }
+    assert statuses in ([202, 202], [202, 409])
+
+    responses = (first, second)
+    accepted = [response for response in responses if response.status_code == 202]
+    rejected = [response for response in responses if response.status_code == 409]
+    if rejected:
+        assert rejected[0].json()["error"]["code"] in {
+            "proposal_already_pending",
+            "proposal_conflict",
+            "proposal_stale",
+        }
+
+    runs = []
+    for response in accepted:
+        workflow_run_id = response.json()["workflow_run_id"]
+        status_response = await api_client.get(
+            f"/api/v1/workflows/{workflow_run_id}",
+            headers=bearer(admin_token),
+        )
+        assert status_response.status_code == 200
+        runs.append(status_response.json())
+
+    assert any(run["status"] == "completed" for run in runs)
+    failed = [run for run in runs if run["status"] == "failed"]
+    if failed:
+        assert failed[0]["error_message"] == (
+            "A work order proposal is already pending review."
+        )
 
     await migrated_db_session.rollback()
     count = await migrated_db_session.scalar(

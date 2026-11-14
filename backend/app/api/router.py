@@ -18,6 +18,7 @@ from app.api.routes.work_orders import (
     work_orders,
 )
 from app.api.routes.workflow_runs import workflow_runs
+from app.api.routes.workflows import workflows
 
 api_router = APIRouter()
 api_router.include_router(health.router)
@@ -36,3 +37,4 @@ api_router.include_router(documents.router)
 api_router.include_router(retrieval.router)
 api_router.include_router(diagnostics.router)
 api_router.include_router(workflow_runs.router)
+api_router.include_router(workflows.router)

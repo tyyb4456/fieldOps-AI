@@ -14,7 +14,7 @@ celery_app.conf.update(
     accept_content=["json"],
     broker_connection_retry_on_startup=True,
     enable_utc=True,
-    imports=("app.tasks.documents",),
+    imports=("app.tasks.documents", "app.tasks.workflows"),
     result_expires=60 * 60 * 24,
     result_serializer="json",
     task_acks_late=True,

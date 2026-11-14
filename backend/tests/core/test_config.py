@@ -79,6 +79,7 @@ def production_settings(**overrides: object) -> Settings:
         "clerk_authorized_parties": "https://app.example.com",
         "google_api_key": "test-google-api-key",
         "openai_api_key": "test-openai-api-key",
+        "celery_task_always_eager": False,
     }
     values.update(overrides)
     return Settings(**values)
@@ -260,6 +261,22 @@ def test_production_allows_wildcard_cors_without_credentials() -> None:
 def test_production_rejects_db_echo() -> None:
     with pytest.raises(ValidationError):
         production_settings(db_echo=True)
+
+
+def test_production_rejects_eager_celery_mode() -> None:
+    with pytest.raises(ValidationError):
+        production_settings(celery_task_always_eager=True)
+
+
+def test_development_allows_eager_celery_mode() -> None:
+    settings = Settings(
+        _env_file=None,
+        environment="development",
+        celery_task_always_eager=True,
+    )
+
+    assert settings.celery_task_always_eager is True
+    assert settings.is_production is False
 
 
 @pytest.mark.parametrize(
