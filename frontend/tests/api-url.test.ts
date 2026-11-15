@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { resolveApiBaseUrl } from '../src/lib/api-url.ts'
+import { resolveApiBaseUrl } from '../src/lib/api/base-url.ts'
 
 test('uses the localhost fallback in development', () => {
   assert.equal(

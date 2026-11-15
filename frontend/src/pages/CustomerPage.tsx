@@ -13,7 +13,7 @@ export function CustomerPage() {
         Complaint submission, equipment history, and repair tracking are the
         next implementation step. This page is protected for the customer role
         and confirms that your account has a customer profile
-        {user?.customer_id ? ` (${user.customer_id.slice(0, 8)}…)` : ''}.
+        {user?.customer_id ? ` (${user.customer_id.slice(0, 8)}...)` : ''}.
       </p>
     </section>
   )

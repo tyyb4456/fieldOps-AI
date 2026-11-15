@@ -1,19 +1,10 @@
-import { UserButton } from '@clerk/react'
+import { UserButton, useAuth } from '@clerk/react'
 import { Link, NavLink, Outlet } from 'react-router-dom'
 import { useAppAuth } from '../auth/app-auth-context'
-import type { UserRole } from '../lib/api'
-
-const ROLE_LABELS: Record<UserRole, string> = {
-  customer: 'Customer',
-  technician: 'Technician',
-  admin: 'Administrator',
-}
-
-const ROLE_HOME: Record<UserRole, string> = {
-  customer: '/customer',
-  technician: '/technician',
-  admin: '/admin',
-}
+import {
+  navigationForRole,
+  roleLabel,
+} from '../navigation/role-navigation'
 
 function navLinkClass({ isActive }: { isActive: boolean }): string {
   return [
@@ -24,46 +15,82 @@ function navLinkClass({ isActive }: { isActive: boolean }): string {
   ].join(' ')
 }
 
-export function AppShell() {
+function Brand() {
+  return (
+    <Link to="/" className="flex items-center gap-3">
+      <span className="flex size-9 items-center justify-center rounded-xl bg-sky-500 font-bold text-slate-950">
+        F
+      </span>
+      <span className="text-sm font-semibold tracking-wide text-white sm:text-base">
+        FieldOps AI
+      </span>
+    </Link>
+  )
+}
+
+function Navigation({ mobile = false }: { mobile?: boolean }) {
   const { user } = useAppAuth()
+  const items = navigationForRole(user?.role)
+
+  if (items.length === 0) {
+    return null
+  }
+
+  return (
+    <nav
+      aria-label={mobile ? 'Mobile navigation' : 'Primary navigation'}
+      className={
+        mobile
+          ? 'flex flex-wrap gap-1 border-t border-slate-800 px-4 py-2 md:hidden'
+          : 'hidden items-center gap-1 md:flex'
+      }
+    >
+      {items.map((item) => (
+        <NavLink
+          key={item.to}
+          to={item.to}
+          end={item.end}
+          className={navLinkClass}
+        >
+          {item.label}
+        </NavLink>
+      ))}
+    </nav>
+  )
+}
+
+export function AppShell() {
+  const { user, isLoading } = useAppAuth()
+  const { isLoaded, isSignedIn } = useAuth()
+  const isProfileLoading = isLoaded && isSignedIn && isLoading
 
   return (
     <div className="flex min-h-screen flex-col bg-slate-950 text-slate-100">
-      <header className="border-b border-slate-800 bg-slate-900/70 backdrop-blur">
+      <header
+        className="border-b border-slate-800 bg-slate-900/70 backdrop-blur"
+        aria-busy={!isLoaded || isProfileLoading}
+      >
         <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
-          <Link to="/" className="flex items-center gap-3">
-            <span className="flex size-9 items-center justify-center rounded-xl bg-sky-500 font-bold text-slate-950">
-              F
-            </span>
-            <span className="text-sm font-semibold tracking-wide text-white sm:text-base">
-              FieldOps AI
-            </span>
-          </Link>
+          <Brand />
 
-          <nav className="hidden items-center gap-1 md:flex">
-            {user ? (
-              <>
-                <NavLink to="/dashboard" className={navLinkClass}>
-                  Dashboard
-                </NavLink>
-                <NavLink
-                  to={ROLE_HOME[user.role]}
-                  className={navLinkClass}
-                >
-                  {ROLE_LABELS[user.role]}
-                </NavLink>
-              </>
-            ) : null}
-          </nav>
+          <Navigation />
 
           <div className="flex items-center gap-3">
-            {user ? (
+            {isProfileLoading ? (
+              <span
+                className="text-xs text-slate-400"
+                role="status"
+                aria-live="polite"
+              >
+                Loading account...
+              </span>
+            ) : user ? (
               <>
                 <span className="hidden text-right text-xs text-slate-400 sm:block">
                   <span className="block font-medium text-slate-200">
                     {user.full_name}
                   </span>
-                  {ROLE_LABELS[user.role]}
+                  {roleLabel(user.role)}
                 </span>
                 <UserButton />
               </>
@@ -77,6 +104,8 @@ export function AppShell() {
             )}
           </div>
         </div>
+
+        <Navigation mobile />
       </header>
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
@@ -84,7 +113,7 @@ export function AppShell() {
       </main>
 
       <footer className="border-t border-slate-800 px-4 py-4 text-center text-xs text-slate-500">
-        FieldOps AI · Application authorization is enforced by the FastAPI
+        FieldOps AI. Application authorization is enforced by the FastAPI
         backend.
       </footer>
     </div>

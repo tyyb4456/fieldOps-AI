@@ -6,7 +6,7 @@ export function SignUpPage() {
   const { isLoaded, isSignedIn } = useAuth()
 
   if (!isLoaded) {
-    return <LoadingScreen label="Loading sign up…" />
+    return <LoadingScreen label="Loading sign up..." />
   }
 
   if (isSignedIn) {

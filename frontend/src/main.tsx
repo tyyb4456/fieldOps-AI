@@ -5,14 +5,17 @@ import './index.css'
 import App from './App.tsx'
 import { AppAuthProvider } from './auth/AuthProvider.tsx'
 import { ClerkRouterProvider } from './auth/ClerkRouterProvider.tsx'
+import { ApiClientProvider } from './lib/api/ApiClientProvider.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
       <ClerkRouterProvider>
-        <AppAuthProvider>
-          <App />
-        </AppAuthProvider>
+        <ApiClientProvider>
+          <AppAuthProvider>
+            <App />
+          </AppAuthProvider>
+        </ApiClientProvider>
       </ClerkRouterProvider>
     </BrowserRouter>
   </StrictMode>,

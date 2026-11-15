@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react'
-import type { CurrentUser } from '../lib/api'
+import type { CurrentUser } from '../features/accounts/types'
 
 export interface AppAuthState {
   user: CurrentUser | null

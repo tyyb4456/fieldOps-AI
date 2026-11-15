@@ -1,18 +1,9 @@
 import { Link } from 'react-router-dom'
 import { useAppAuth } from '../auth/app-auth-context'
-import type { UserRole } from '../lib/api'
-
-const ROLE_LABELS: Record<UserRole, string> = {
-  customer: 'Customer',
-  technician: 'Technician',
-  admin: 'Administrator',
-}
-
-const ROLE_DESTINATIONS: Record<UserRole, string> = {
-  customer: '/customer',
-  technician: '/technician',
-  admin: '/admin',
-}
+import {
+  homePathForRole,
+  roleLabel,
+} from '../navigation/role-navigation'
 
 export function DashboardPage() {
   const { user } = useAppAuth()
@@ -20,6 +11,9 @@ export function DashboardPage() {
   if (!user) {
     return null
   }
+
+  const role = roleLabel(user.role) ?? 'Unknown role'
+  const destination = homePathForRole(user.role)
 
   return (
     <div className="grid gap-6">
@@ -40,7 +34,7 @@ export function DashboardPage() {
               Role
             </dt>
             <dd className="mt-1 text-sm font-medium text-slate-100">
-              {ROLE_LABELS[user.role]}
+              {role}
             </dd>
           </div>
           <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-4">
@@ -73,12 +67,14 @@ export function DashboardPage() {
           </div>
         </dl>
 
-        <Link
-          to={ROLE_DESTINATIONS[user.role]}
-          className="mt-6 inline-flex rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-400"
-        >
-          Open {ROLE_LABELS[user.role]} workspace
-        </Link>
+        {destination ? (
+          <Link
+            to={destination}
+            className="mt-6 inline-flex rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-400"
+          >
+            Open {role} workspace
+          </Link>
+        ) : null}
       </section>
     </div>
   )

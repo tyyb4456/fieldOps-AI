@@ -1,16 +1,12 @@
 import { Link } from 'react-router-dom'
 import { useAuth } from '@clerk/react'
 import { useAppAuth } from '../auth/app-auth-context'
-
-const ROLE_HOME = {
-  customer: '/customer',
-  technician: '/technician',
-  admin: '/admin',
-} as const
+import { homePathForRole } from '../navigation/role-navigation'
 
 export function HomePage() {
   const { isLoaded, isSignedIn } = useAuth()
   const { user } = useAppAuth()
+  const workspacePath = homePathForRole(user?.role)
 
   return (
     <div className="grid gap-10 py-10 lg:grid-cols-[1.2fr_0.8fr] lg:items-center">
@@ -31,7 +27,7 @@ export function HomePage() {
         <div className="mt-8 flex flex-wrap items-center gap-3">
           {isLoaded && isSignedIn ? (
             <Link
-              to={user ? ROLE_HOME[user.role] : '/dashboard'}
+              to={workspacePath ?? '/dashboard'}
               className="rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-400"
             >
               Open your workspace

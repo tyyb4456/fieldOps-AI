@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
 import { useAppAuth } from './app-auth-context'
-import type { UserRole } from '../lib/api'
+import type { UserRole } from '../lib/api/types'
+import { resolveRouteAccess } from './route-access'
 import { ErrorScreen } from '../components/ErrorScreen'
 import { LoadingScreen } from '../components/LoadingScreen'
 
@@ -14,37 +15,29 @@ export function ProtectedRoute({
   allowedRoles,
   children,
 }: ProtectedRouteProps) {
-  const { user, isLoading, isUnauthorized, error, refresh } = useAppAuth()
+  const auth = useAppAuth()
   const location = useLocation()
+  const access = resolveRouteAccess(auth, {
+    allowedRoles,
+    currentPath: location.pathname,
+  })
 
-  if (isLoading) {
-    return <LoadingScreen label="Checking your session�?�" />
+  if (access.kind === 'loading') {
+    return <LoadingScreen label="Checking your session..." />
   }
 
-  if (error) {
-    return <ErrorScreen message={error} onRetry={refresh} />
+  if (access.kind === 'error') {
+    return <ErrorScreen message={access.message} onRetry={auth.refresh} />
   }
 
-  if (isUnauthorized) {
-    return <Navigate to="/unauthorized" replace />
-  }
-
-  if (!user) {
+  if (access.kind === 'redirect') {
     return (
       <Navigate
-        to="/sign-in"
+        to={access.to}
         replace
-        state={{ from: location.pathname }}
+        state={access.state}
       />
     )
-  }
-
-  if (!user.is_active) {
-    return <Navigate to="/unauthorized" replace />
-  }
-
-  if (allowedRoles && !allowedRoles.includes(user.role)) {
-    return <Navigate to="/unauthorized" replace />
   }
 
   return <>{children}</>

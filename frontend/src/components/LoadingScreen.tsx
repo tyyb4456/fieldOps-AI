@@ -1,5 +1,5 @@
 export function LoadingScreen({
-  label = 'Loading…',
+  label = 'Loading...',
 }: {
   label?: string
 }) {

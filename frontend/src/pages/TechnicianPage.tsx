@@ -14,7 +14,7 @@ export function TechnicianPage() {
         the next implementation step. This page is protected for the technician
         role and confirms that your account has a technician profile
         {user?.technician_id
-          ? ` (${user.technician_id.slice(0, 8)}…)`
+          ? ` (${user.technician_id.slice(0, 8)}...)`
           : ''}.
       </p>
     </section>

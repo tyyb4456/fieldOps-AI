@@ -7,16 +7,17 @@ import {
 } from 'react'
 import { useAuth } from '@clerk/react'
 import {
-  ApiError,
   bootstrapCurrentUser,
   fetchCurrentUser,
-  type CurrentUser,
-} from '../lib/api'
+} from '../features/accounts/api'
+import type { CurrentUser } from '../features/accounts/types'
+import { useApiClient } from '../lib/api/api-client-context'
 import { classifyAuthError } from './auth-errors'
 import { AppAuthContext, type AppAuthState } from './app-auth-context'
 
 export function AppAuthProvider({ children }: { children: ReactNode }) {
-  const { isLoaded, isSignedIn, getToken, signOut } = useAuth()
+  const { isLoaded, isSignedIn, signOut } = useAuth()
+  const apiClient = useApiClient()
   const [user, setUser] = useState<CurrentUser | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isUnauthorized, setIsUnauthorized] = useState(false)
@@ -48,24 +49,15 @@ export function AppAuthProvider({ children }: { children: ReactNode }) {
       setError(null)
 
       try {
-        const token = await getToken()
-        if (!token) {
-          throw new ApiError(
-            401,
-            'missing_token',
-            'Unable to obtain a Clerk session token.',
-          )
-        }
-
         let currentUser: CurrentUser
         try {
-          currentUser = await fetchCurrentUser(token)
+          currentUser = await fetchCurrentUser(apiClient)
         } catch (caught) {
           const failure = classifyAuthError(caught)
           if (failure.kind !== 'not-provisioned') {
             throw caught
           }
-          currentUser = await bootstrapCurrentUser(token)
+          currentUser = await bootstrapCurrentUser(apiClient)
         }
 
         if (!cancelled) {
@@ -80,7 +72,11 @@ export function AppAuthProvider({ children }: { children: ReactNode }) {
 
         if (failure.kind === 'sign-out') {
           setUser(null)
-          await signOut()
+          try {
+            await signOut()
+          } catch {
+            setError('Unable to sign out. Please try again.')
+          }
           return
         }
 
@@ -107,7 +103,7 @@ export function AppAuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true
     }
-  }, [getToken, isLoaded, isSignedIn, reloadKey, signOut])
+  }, [apiClient, isLoaded, isSignedIn, reloadKey, signOut])
 
   const value = useMemo<AppAuthState>(
     () => ({ user, isLoading, isUnauthorized, error, refresh }),
