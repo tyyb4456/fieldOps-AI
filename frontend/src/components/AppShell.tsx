@@ -3,6 +3,7 @@ import { Link, NavLink, Outlet } from 'react-router-dom'
 import { useAppAuth } from '../auth/app-auth-context'
 import {
   CUSTOMER_NAV_ITEMS,
+  TECHNICIAN_NAV_ITEMS,
   navigationForRole,
   roleLabel,
 } from '../navigation/role-navigation'
@@ -88,6 +89,34 @@ function CustomerNavigation() {
   )
 }
 
+function TechnicianNavigation() {
+  const { user } = useAppAuth()
+
+  if (user?.role !== 'technician') {
+    return null
+  }
+
+  return (
+    <div className="border-t border-slate-800 bg-slate-950/40">
+      <nav
+        aria-label="Technician navigation"
+        className="mx-auto flex w-full max-w-6xl gap-1 overflow-x-auto px-4 py-2 sm:px-6"
+      >
+        {TECHNICIAN_NAV_ITEMS.map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            end={item.end}
+            className={navLinkClass}
+          >
+            {item.label}
+          </NavLink>
+        ))}
+      </nav>
+    </div>
+  )
+}
+
 export function AppShell() {
   const { user, isLoading } = useAppAuth()
   const { isLoaded, isSignedIn } = useAuth()
@@ -136,6 +165,7 @@ export function AppShell() {
 
         <Navigation mobile />
         <CustomerNavigation />
+        <TechnicianNavigation />
       </header>
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">

@@ -47,6 +47,22 @@ export interface WorkOrderListQuery {
   offset?: number
 }
 
+export interface ServiceRecordListQuery {
+  work_order_id?: string
+  equipment_id?: string
+  technician_id?: string
+  limit?: number
+  offset?: number
+}
+
+export interface CompletionReportListQuery {
+  work_order_id?: string
+  service_record_id?: string
+  evidence_status?: EvidenceStatus
+  limit?: number
+  offset?: number
+}
+
 export interface ServiceRecord {
   id: string
   equipment_id: string

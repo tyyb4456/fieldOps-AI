@@ -724,3 +724,235 @@ async def test_active_assignment_partial_unique_index_is_enforced(
         ).all()
     }
     assert "uq_technician_assignments_active_work_order" in index_names
+
+
+async def test_technician_cannot_start_work_before_accepting_offer(
+    api_client,
+    migrated_db_session: AsyncSession,
+) -> None:
+    (
+        _,
+        _,
+        _,
+        _,
+        admin_token,
+    ) = await _seed_ready_complaint(migrated_db_session)
+    from app.models.complaint import Complaint
+
+    complaint = await migrated_db_session.scalar(select(Complaint))
+    assert complaint is not None
+    body = await _create_work_order(
+        api_client,
+        complaint.id,
+        admin_token,
+    )
+    await _validate(api_client, body["id"], admin_token)
+    _, technician, technician_token = await seed_technician(
+        migrated_db_session
+    )
+    await _assign(
+        api_client,
+        body["id"],
+        technician.id,
+        admin_token,
+    )
+
+    response = await api_client.post(
+        f"/api/v1/work-orders/{body['id']}/status",
+        headers=bearer(technician_token),
+        json={"status": "in_progress"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "invalid_status_transition"
+
+    unchanged = await api_client.get(
+        f"/api/v1/admin/work-orders/{body['id']}",
+        headers=bearer(admin_token),
+    )
+    assert unchanged.json()["status"] == "assigned"
+
+
+async def test_technician_pause_resume_and_verification_lock_records(
+    api_client,
+    migrated_db_session: AsyncSession,
+) -> None:
+    (
+        _,
+        _,
+        _,
+        _,
+        admin_token,
+    ) = await _seed_ready_complaint(migrated_db_session)
+    from app.models.complaint import Complaint
+
+    complaint = await migrated_db_session.scalar(select(Complaint))
+    assert complaint is not None
+    body = await _create_work_order(
+        api_client,
+        complaint.id,
+        admin_token,
+    )
+    await _validate(api_client, body["id"], admin_token)
+    _, technician, technician_token = await seed_technician(
+        migrated_db_session
+    )
+    assignment = await _assign(
+        api_client,
+        body["id"],
+        technician.id,
+        admin_token,
+    )
+    accepted = await api_client.post(
+        f"/api/v1/assignments/{assignment['id']}/accept",
+        headers=bearer(technician_token),
+    )
+    assert accepted.status_code == 200, accepted.text
+
+    started = await api_client.post(
+        f"/api/v1/work-orders/{body['id']}/status",
+        headers=bearer(technician_token),
+        json={"status": "in_progress"},
+    )
+    assert started.status_code == 200, started.text
+
+    awaiting_parts = await api_client.post(
+        f"/api/v1/work-orders/{body['id']}/status",
+        headers=bearer(technician_token),
+        json={"status": "awaiting_parts"},
+    )
+    assert awaiting_parts.status_code == 200, awaiting_parts.text
+    assert awaiting_parts.json()["status"] == "awaiting_parts"
+
+    resumed = await api_client.post(
+        f"/api/v1/work-orders/{body['id']}/status",
+        headers=bearer(technician_token),
+        json={"status": "in_progress"},
+    )
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["status"] == "in_progress"
+
+    service_record = await api_client.post(
+        f"/api/v1/work-orders/{body['id']}/service-records",
+        headers=bearer(technician_token),
+        json={
+            "findings": "Parts delay resolved.",
+            "work_performed": "Replaced the failed connector.",
+        },
+    )
+    assert service_record.status_code == 201, service_record.text
+    service_record_id = service_record.json()["id"]
+
+    pending = await api_client.post(
+        f"/api/v1/work-orders/{body['id']}/status",
+        headers=bearer(technician_token),
+        json={"status": "pending_verification"},
+    )
+    assert pending.status_code == 200, pending.text
+
+    technician_completion = await api_client.post(
+        f"/api/v1/work-orders/{body['id']}/status",
+        headers=bearer(technician_token),
+        json={"status": "completed"},
+    )
+    assert technician_completion.status_code == 409
+    assert (
+        technician_completion.json()["error"]["code"]
+        == "invalid_status_transition"
+    )
+
+    late_record = await api_client.post(
+        f"/api/v1/work-orders/{body['id']}/service-records",
+        headers=bearer(technician_token),
+        json={"findings": "Late service record."},
+    )
+    assert late_record.status_code == 409
+    assert (
+        late_record.json()["error"]["code"]
+        == "invalid_service_record_state"
+    )
+
+    late_update = await api_client.patch(
+        f"/api/v1/service-records/{service_record_id}",
+        headers=bearer(technician_token),
+        json={"work_performed": "Late update."},
+    )
+    assert late_update.status_code == 409
+    assert (
+        late_update.json()["error"]["code"]
+        == "invalid_service_record_state"
+    )
+
+    readable = await api_client.get(
+        f"/api/v1/service-records/{service_record_id}",
+        headers=bearer(technician_token),
+    )
+    assert readable.status_code == 200
+
+
+async def test_service_record_access_is_limited_to_owner(
+    api_client,
+    migrated_db_session: AsyncSession,
+) -> None:
+    (
+        _,
+        _,
+        _,
+        _,
+        admin_token,
+    ) = await _seed_ready_complaint(migrated_db_session)
+    from app.models.complaint import Complaint
+
+    complaint = await migrated_db_session.scalar(select(Complaint))
+    assert complaint is not None
+    body = await _create_work_order(
+        api_client,
+        complaint.id,
+        admin_token,
+    )
+    await _validate(api_client, body["id"], admin_token)
+    _, technician, technician_token = await seed_technician(
+        migrated_db_session
+    )
+    assignment = await _assign(
+        api_client,
+        body["id"],
+        technician.id,
+        admin_token,
+    )
+    accepted = await api_client.post(
+        f"/api/v1/assignments/{assignment['id']}/accept",
+        headers=bearer(technician_token),
+    )
+    assert accepted.status_code == 200, accepted.text
+
+    service_record = await api_client.post(
+        f"/api/v1/work-orders/{body['id']}/service-records",
+        headers=bearer(technician_token),
+        json={"findings": "Owner-recorded finding."},
+    )
+    assert service_record.status_code == 201, service_record.text
+    service_record_id = service_record.json()["id"]
+
+    _, _, other_token = await seed_technician(migrated_db_session)
+
+    hidden = await api_client.get(
+        f"/api/v1/service-records/{service_record_id}",
+        headers=bearer(other_token),
+    )
+    assert hidden.status_code == 404
+    assert hidden.json()["error"]["code"] == "not_found"
+
+    forbidden_update = await api_client.patch(
+        f"/api/v1/service-records/{service_record_id}",
+        headers=bearer(other_token),
+        json={"findings": "Another technician edit."},
+    )
+    assert forbidden_update.status_code == 404
+    assert forbidden_update.json()["error"]["code"] == "not_found"
+
+    readable = await api_client.get(
+        f"/api/v1/service-records/{service_record_id}",
+        headers=bearer(technician_token),
+    )
+    assert readable.status_code == 200

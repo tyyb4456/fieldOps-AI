@@ -14,11 +14,25 @@ export interface CustomerNavItem {
   end?: boolean
 }
 
+export interface TechnicianNavItem {
+  label: string
+  to: string
+  end?: boolean
+}
+
 export const CUSTOMER_NAV_ITEMS: readonly CustomerNavItem[] = [
   { label: 'Overview', to: '/customer', end: true },
   { label: 'Equipment', to: '/customer/equipment' },
   { label: 'Complaints', to: '/customer/complaints' },
   { label: 'Profile', to: '/customer/profile' },
+]
+
+export const TECHNICIAN_NAV_ITEMS: readonly TechnicianNavItem[] = [
+  { label: 'Overview', to: '/technician', end: true },
+  { label: 'Offered assignments', to: '/technician/assignments' },
+  { label: 'My work orders', to: '/technician/work-orders' },
+  { label: 'Service records', to: '/technician/service-records' },
+  { label: 'Technical references', to: '/technician/technical-references' },
 ]
 
 export const APP_NAV_ITEMS: readonly AppNavItem[] = [

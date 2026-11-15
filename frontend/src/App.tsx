@@ -5,7 +5,6 @@ import { HomePage } from './pages/HomePage'
 import { SignInPage } from './pages/SignInPage'
 import { SignUpPage } from './pages/SignUpPage'
 import { DashboardPage } from './pages/DashboardPage'
-import { TechnicianPage } from './pages/TechnicianPage'
 import { AdminPage } from './pages/AdminPage'
 import { UnauthorizedPage } from './pages/UnauthorizedPage'
 import { NotFoundPage } from './pages/NotFoundPage'
@@ -18,6 +17,13 @@ import { EquipmentEditPage } from './features/equipment/pages/EquipmentEditPage'
 import { ComplaintListPage } from './features/complaints/pages/ComplaintListPage'
 import { ComplaintNewPage } from './features/complaints/pages/ComplaintNewPage'
 import { ComplaintDetailPage } from './features/complaints/pages/ComplaintDetailPage'
+import { TechnicianDashboardPage } from './features/technicians/pages/TechnicianDashboardPage'
+import { TechnicianAssignmentsPage } from './features/technicians/pages/TechnicianAssignmentsPage'
+import { TechnicianWorkOrdersPage } from './features/technicians/pages/TechnicianWorkOrdersPage'
+import { TechnicianWorkOrderDetailPage } from './features/technicians/pages/TechnicianWorkOrderDetailPage'
+import { TechnicianServiceRecordsPage } from './features/technicians/pages/TechnicianServiceRecordsPage'
+import { TechnicianServiceRecordDetailPage } from './features/technicians/pages/TechnicianServiceRecordDetailPage'
+import { TechnicianTechnicalReferencesPage } from './features/technicians/pages/TechnicianTechnicalReferencesPage'
 
 export default function App() {
   return (
@@ -63,10 +69,30 @@ export default function App() {
           path="technician"
           element={
             <ProtectedRoute allowedRoles={['technician']}>
-              <TechnicianPage />
+              <Outlet />
             </ProtectedRoute>
           }
-        />
+        >
+          <Route index element={<TechnicianDashboardPage />} />
+          <Route path="assignments" element={<TechnicianAssignmentsPage />} />
+          <Route path="work-orders" element={<TechnicianWorkOrdersPage />} />
+          <Route
+            path="work-orders/:workOrderId"
+            element={<TechnicianWorkOrderDetailPage />}
+          />
+          <Route
+            path="service-records"
+            element={<TechnicianServiceRecordsPage />}
+          />
+          <Route
+            path="service-records/:serviceRecordId"
+            element={<TechnicianServiceRecordDetailPage />}
+          />
+          <Route
+            path="technical-references"
+            element={<TechnicianTechnicalReferencesPage />}
+          />
+        </Route>
         <Route
           path="admin"
           element={

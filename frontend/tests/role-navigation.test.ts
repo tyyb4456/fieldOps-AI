@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  TECHNICIAN_NAV_ITEMS,
   homePathForRole,
   navigationForRole,
   roleLabel,
@@ -31,6 +32,19 @@ test('unknown or missing roles receive no navigation', () => {
   assert.deepEqual(navigationForRole('owner'), [])
   assert.deepEqual(navigationForRole(null), [])
   assert.equal(navigationForRole('owner').some((item) => item.to === '/admin'), false)
+})
+
+test('technician workspace navigation exposes the technician pages', () => {
+  assert.deepEqual(
+    TECHNICIAN_NAV_ITEMS.map((item) => item.to),
+    [
+      '/technician',
+      '/technician/assignments',
+      '/technician/work-orders',
+      '/technician/service-records',
+      '/technician/technical-references',
+    ],
+  )
 })
 
 test('role home paths and labels come from one mapping', () => {

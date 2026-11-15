@@ -883,3 +883,85 @@ async def test_active_assignment_integrity_error_returns_generic_conflict(
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "assignment_conflict"
     assert "uq_technician_assignments" not in response.text
+
+
+async def test_accepted_assignment_rejects_duplicate_transitions(
+    api_client,
+    migrated_db_session: AsyncSession,
+) -> None:
+    work_order_id, _, admin_token = await _create_work_order(
+        api_client,
+        migrated_db_session,
+    )
+    _, _, technician_token, assignment = await _offer_work_order(
+        api_client,
+        migrated_db_session,
+        work_order_id,
+        admin_token,
+    )
+    assignment_id = uuid.UUID(assignment["id"])
+
+    accepted = await api_client.post(
+        f"/api/v1/assignments/{assignment_id}/accept",
+        headers=bearer(technician_token),
+    )
+    assert accepted.status_code == 200, accepted.text
+
+    for action in ("accept", "reject"):
+        duplicate = await api_client.post(
+            f"/api/v1/assignments/{assignment_id}/{action}",
+            headers=bearer(technician_token),
+        )
+        assert duplicate.status_code == 409
+        assert (
+            duplicate.json()["error"]["code"]
+            == "invalid_assignment_state"
+        )
+
+    status, states = await _assignment_state(
+        _session_factory(migrated_db_session),
+        uuid.UUID(work_order_id),
+    )
+    assert status is WorkOrderStatus.ACCEPTED
+    assert states[assignment_id] is AssignmentStatus.ACCEPTED
+
+
+async def test_rejected_assignment_rejects_duplicate_transitions(
+    api_client,
+    migrated_db_session: AsyncSession,
+) -> None:
+    work_order_id, _, admin_token = await _create_work_order(
+        api_client,
+        migrated_db_session,
+    )
+    _, _, technician_token, assignment = await _offer_work_order(
+        api_client,
+        migrated_db_session,
+        work_order_id,
+        admin_token,
+    )
+    assignment_id = uuid.UUID(assignment["id"])
+
+    rejected = await api_client.post(
+        f"/api/v1/assignments/{assignment_id}/reject",
+        headers=bearer(technician_token),
+    )
+    assert rejected.status_code == 200, rejected.text
+
+    for action in ("reject", "accept"):
+        duplicate = await api_client.post(
+            f"/api/v1/assignments/{assignment_id}/{action}",
+            headers=bearer(technician_token),
+        )
+        assert duplicate.status_code == 409
+        assert (
+            duplicate.json()["error"]["code"]
+            == "invalid_assignment_state"
+        )
+
+    status, states = await _assignment_state(
+        _session_factory(migrated_db_session),
+        uuid.UUID(work_order_id),
+    )
+    assert status is WorkOrderStatus.AWAITING_ASSIGNMENT
+    assert states[assignment_id] is AssignmentStatus.REJECTED

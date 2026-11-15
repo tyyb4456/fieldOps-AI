@@ -125,3 +125,31 @@ export function isComplaintStatus(value: unknown): value is ComplaintStatus {
     (COMPLAINT_STATUSES as readonly string[]).includes(value)
   )
 }
+
+export function isWorkOrderStatus(value: unknown): value is WorkOrderStatus {
+  return (
+    typeof value === 'string' &&
+    (WORK_ORDER_STATUSES as readonly string[]).includes(value)
+  )
+}
+
+export function isAssignmentStatus(value: unknown): value is AssignmentStatus {
+  return (
+    typeof value === 'string' &&
+    (ASSIGNMENT_STATUSES as readonly string[]).includes(value)
+  )
+}
+
+export function isEvidenceStatus(value: unknown): value is EvidenceStatus {
+  return (
+    typeof value === 'string' &&
+    (EVIDENCE_STATUSES as readonly string[]).includes(value)
+  )
+}
+
+export function isAnswerStatus(value: unknown): value is AnswerStatus {
+  return (
+    typeof value === 'string' &&
+    (ANSWER_STATUSES as readonly string[]).includes(value)
+  )
+}

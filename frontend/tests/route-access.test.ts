@@ -97,6 +97,28 @@ test('allowed roles render the protected route', () => {
   )
 })
 
+test('customer and admin accounts cannot access technician screens', () => {
+  for (const role of ['customer', 'admin'] as const) {
+    assert.deepEqual(
+      resolveRouteAccess(
+        { ...signedOut(), user: user(role) },
+        { allowedRoles: ['technician'] },
+      ),
+      { kind: 'redirect', to: '/unauthorized' },
+    )
+  }
+})
+
+test('technicians are allowed on technician-only screens', () => {
+  assert.deepEqual(
+    resolveRouteAccess(
+      { ...signedOut(), user: user('technician') },
+      { allowedRoles: ['technician'] },
+    ),
+    { kind: 'allow' },
+  )
+})
+
 test('every supported role is allowed on its own workspace', () => {
   for (const role of ['customer', 'technician', 'admin'] as const) {
     assert.deepEqual(
