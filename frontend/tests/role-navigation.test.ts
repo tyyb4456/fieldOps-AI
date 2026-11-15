@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  ADMIN_NAV_ITEMS,
   TECHNICIAN_NAV_ITEMS,
   homePathForRole,
   navigationForRole,
@@ -43,6 +44,24 @@ test('technician workspace navigation exposes the technician pages', () => {
       '/technician/work-orders',
       '/technician/service-records',
       '/technician/technical-references',
+    ],
+  )
+})
+
+test('administrator workspace navigation exposes the admin pages', () => {
+  assert.deepEqual(
+    ADMIN_NAV_ITEMS.map((item) => item.to),
+    [
+      '/admin',
+      '/admin/complaints',
+      '/admin/work-orders',
+      '/admin/proposals',
+      '/admin/assignments',
+      '/admin/completion-reports',
+      '/admin/documents',
+      '/admin/technicians',
+      '/admin/customers',
+      '/admin/workflows',
     ],
   )
 })

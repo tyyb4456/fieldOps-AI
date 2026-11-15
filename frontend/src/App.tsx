@@ -5,7 +5,24 @@ import { HomePage } from './pages/HomePage'
 import { SignInPage } from './pages/SignInPage'
 import { SignUpPage } from './pages/SignUpPage'
 import { DashboardPage } from './pages/DashboardPage'
-import { AdminPage } from './pages/AdminPage'
+import { AdminDashboardPage } from './features/admin/pages/AdminDashboardPage'
+import { AdminComplaintsPage } from './features/admin/pages/AdminComplaintsPage'
+import { AdminComplaintDetailPage } from './features/admin/pages/AdminComplaintDetailPage'
+import { AdminWorkOrdersPage } from './features/admin/pages/AdminWorkOrdersPage'
+import { AdminWorkOrderDetailPage } from './features/admin/pages/AdminWorkOrderDetailPage'
+import { AdminProposalsPage } from './features/admin/pages/AdminProposalsPage'
+import { AdminProposalDetailPage } from './features/admin/pages/AdminProposalDetailPage'
+import { AdminAssignmentsPage } from './features/admin/pages/AdminAssignmentsPage'
+import { AdminCompletionReportsPage } from './features/admin/pages/AdminCompletionReportsPage'
+import { AdminCompletionReportDetailPage } from './features/admin/pages/AdminCompletionReportDetailPage'
+import { AdminDocumentsPage } from './features/admin/pages/AdminDocumentsPage'
+import { AdminDocumentDetailPage } from './features/admin/pages/AdminDocumentDetailPage'
+import { AdminTechniciansPage } from './features/admin/pages/AdminTechniciansPage'
+import { AdminCustomersPage } from './features/admin/pages/AdminCustomersPage'
+import { AdminCustomerDetailPage } from './features/admin/pages/AdminCustomerDetailPage'
+import { AdminEquipmentDetailPage } from './features/admin/pages/AdminEquipmentDetailPage'
+import { AdminWorkflowsPage } from './features/admin/pages/AdminWorkflowsPage'
+import { AdminWorkflowDetailPage } from './features/admin/pages/AdminWorkflowDetailPage'
 import { UnauthorizedPage } from './pages/UnauthorizedPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { CustomerDashboardPage } from './features/customers/pages/CustomerDashboardPage'
@@ -97,10 +114,56 @@ export default function App() {
           path="admin"
           element={
             <ProtectedRoute allowedRoles={['admin']}>
-              <AdminPage />
+              <Outlet />
             </ProtectedRoute>
           }
-        />
+        >
+          <Route index element={<AdminDashboardPage />} />
+          <Route path="complaints" element={<AdminComplaintsPage />} />
+          <Route
+            path="complaints/:complaintId"
+            element={<AdminComplaintDetailPage />}
+          />
+          <Route path="work-orders" element={<AdminWorkOrdersPage />} />
+          <Route
+            path="work-orders/:workOrderId"
+            element={<AdminWorkOrderDetailPage />}
+          />
+          <Route path="proposals" element={<AdminProposalsPage />} />
+          <Route
+            path="proposals/:proposalId"
+            element={<AdminProposalDetailPage />}
+          />
+          <Route path="assignments" element={<AdminAssignmentsPage />} />
+          <Route
+            path="completion-reports"
+            element={<AdminCompletionReportsPage />}
+          />
+          <Route
+            path="completion-reports/:completionReportId"
+            element={<AdminCompletionReportDetailPage />}
+          />
+          <Route path="documents" element={<AdminDocumentsPage />} />
+          <Route
+            path="documents/:documentId"
+            element={<AdminDocumentDetailPage />}
+          />
+          <Route path="technicians" element={<AdminTechniciansPage />} />
+          <Route path="customers" element={<AdminCustomersPage />} />
+          <Route
+            path="customers/:customerId"
+            element={<AdminCustomerDetailPage />}
+          />
+          <Route
+            path="equipment/:equipmentId"
+            element={<AdminEquipmentDetailPage />}
+          />
+          <Route path="workflows" element={<AdminWorkflowsPage />} />
+          <Route
+            path="workflows/:workflowId"
+            element={<AdminWorkflowDetailPage />}
+          />
+        </Route>
         <Route path="unauthorized" element={<UnauthorizedPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>

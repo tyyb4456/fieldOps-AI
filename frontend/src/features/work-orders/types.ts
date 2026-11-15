@@ -138,7 +138,7 @@ export interface WorkOrderProposal {
   generation_warnings: string[]
   diagnostic_status: DiagnosticStatus
   diagnostic_summary: string
-  diagnostic_snapshot: Record<string, object>
+  diagnostic_snapshot: Record<string, unknown>
   citations: Citation[]
   requires_escalation: boolean
   escalation_reason: string | null

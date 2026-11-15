@@ -2,6 +2,16 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { CurrentUser } from '../src/features/accounts/types.ts'
 import { resolveRouteAccess } from '../src/auth/route-access.ts'
+import {
+  ADMIN_ROUTES,
+  adminComplaintPath,
+  adminCompletionReportPath,
+  adminDocumentPath,
+  adminEquipmentPath,
+  adminProposalPath,
+  adminWorkOrderPath,
+  adminWorkflowPath,
+} from '../src/features/admin/routes.ts'
 
 function user(role: CurrentUser['role'], isActive = true): CurrentUser {
   return {
@@ -125,6 +135,39 @@ test('every supported role is allowed on its own workspace', () => {
       resolveRouteAccess(
         { ...signedOut(), user: user(role) },
         { allowedRoles: [role] },
+      ),
+      { kind: 'allow' },
+    )
+  }
+})
+
+test('non-admin roles cannot open admin list or detail routes', () => {
+  const adminPaths = [
+    ...Object.values(ADMIN_ROUTES),
+    adminComplaintPath('complaint-1'),
+    adminWorkOrderPath('work-order-1'),
+    adminProposalPath('proposal-1'),
+    adminCompletionReportPath('completion-report-1'),
+    adminDocumentPath('document-1'),
+    adminWorkflowPath('workflow-1'),
+    adminEquipmentPath('equipment-1'),
+  ]
+
+  for (const currentPath of adminPaths) {
+    for (const role of ['customer', 'technician'] as const) {
+      assert.deepEqual(
+        resolveRouteAccess(
+          { ...signedOut(), user: user(role) },
+          { allowedRoles: ['admin'], currentPath },
+        ),
+        { kind: 'redirect', to: '/unauthorized' },
+      )
+    }
+
+    assert.deepEqual(
+      resolveRouteAccess(
+        { ...signedOut(), user: user('admin') },
+        { allowedRoles: ['admin'], currentPath },
       ),
       { kind: 'allow' },
     )
