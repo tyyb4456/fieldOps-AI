@@ -104,3 +104,24 @@ export function isUserRole(value: unknown): value is UserRole {
     (USER_ROLES as readonly string[]).includes(value)
   )
 }
+
+export function isPriority(value: unknown): value is Priority {
+  return (
+    typeof value === 'string' &&
+    (PRIORITIES as readonly string[]).includes(value)
+  )
+}
+
+export function isComplaintChannel(value: unknown): value is ComplaintChannel {
+  return (
+    typeof value === 'string' &&
+    (COMPLAINT_CHANNELS as readonly string[]).includes(value)
+  )
+}
+
+export function isComplaintStatus(value: unknown): value is ComplaintStatus {
+  return (
+    typeof value === 'string' &&
+    (COMPLAINT_STATUSES as readonly string[]).includes(value)
+  )
+}

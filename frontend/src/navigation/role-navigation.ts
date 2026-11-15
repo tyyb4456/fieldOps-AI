@@ -8,6 +8,19 @@ export interface AppNavItem {
   end?: boolean
 }
 
+export interface CustomerNavItem {
+  label: string
+  to: string
+  end?: boolean
+}
+
+export const CUSTOMER_NAV_ITEMS: readonly CustomerNavItem[] = [
+  { label: 'Overview', to: '/customer', end: true },
+  { label: 'Equipment', to: '/customer/equipment' },
+  { label: 'Complaints', to: '/customer/complaints' },
+  { label: 'Profile', to: '/customer/profile' },
+]
+
 export const APP_NAV_ITEMS: readonly AppNavItem[] = [
   {
     label: 'Dashboard',
