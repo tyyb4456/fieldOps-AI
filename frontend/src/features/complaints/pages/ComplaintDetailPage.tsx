@@ -8,6 +8,7 @@ import { formatDateTime, formatSymptom } from '../../../lib/format'
 import { useAsyncData } from '../../../lib/hooks/use-async-data'
 import { CUSTOMER_ROUTES, customerEquipmentPath } from '../../customers/routes'
 import { getEquipment } from '../../equipment/api'
+import { ComplaintConversations } from '../../conversations/components/ComplaintConversations'
 import { getComplaint } from '../api'
 import { complaintDetailErrorMessage } from '../errors'
 import {
@@ -170,6 +171,8 @@ export function ComplaintDetailPage() {
           )}
         </div>
       </section>
+
+      <ComplaintConversations complaintId={data.id} />
 
       <p className="text-xs leading-5 text-slate-500">
         Status updates are managed by the service team. This page does not run

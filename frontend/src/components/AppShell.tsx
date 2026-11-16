@@ -1,6 +1,7 @@
 import { UserButton, useAuth } from '@clerk/react'
 import { Link, NavLink, Outlet } from 'react-router-dom'
 import { useAppAuth } from '../auth/app-auth-context'
+import { PendingMessagesProvider } from '../features/conversations/PendingMessagesProvider'
 import {
   ADMIN_NAV_ITEMS,
   CUSTOMER_NAV_ITEMS,
@@ -199,7 +200,9 @@ export function AppShell() {
       </header>
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
-        <Outlet />
+        <PendingMessagesProvider>
+          <Outlet />
+        </PendingMessagesProvider>
       </main>
 
       <footer className="border-t border-slate-800 px-4 py-4 text-center text-xs text-slate-500">

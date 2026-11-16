@@ -6,6 +6,7 @@ import {
   Route,
   Routes,
 } from 'react-router-dom'
+import { PendingMessagesProvider } from '../../src/features/conversations/PendingMessagesProvider.tsx'
 import { ApiClientContext } from '../../src/lib/api/api-client-context.ts'
 import { ApiClient } from '../../src/lib/api/client.ts'
 import { LocationProbe } from './LocationProbe.tsx'
@@ -67,12 +68,14 @@ export function renderRoute(
 ) {
   return render(
     <ApiClientContext.Provider value={client}>
-      <MemoryRouter initialEntries={[options.initialEntry]}>
-        <Routes>
-          <Route path={options.path} element={element} />
-          <Route path="*" element={<LocationProbe />} />
-        </Routes>
-      </MemoryRouter>
+      <PendingMessagesProvider>
+        <MemoryRouter initialEntries={[options.initialEntry]}>
+          <Routes>
+            <Route path={options.path} element={element} />
+            <Route path="*" element={<LocationProbe />} />
+          </Routes>
+        </MemoryRouter>
+      </PendingMessagesProvider>
     </ApiClientContext.Provider>,
   )
 }

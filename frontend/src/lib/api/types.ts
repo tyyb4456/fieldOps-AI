@@ -7,6 +7,13 @@ export type Priority = (typeof PRIORITIES)[number]
 export const COMPLAINT_CHANNELS = ['web', 'whatsapp'] as const
 export type ComplaintChannel = (typeof COMPLAINT_CHANNELS)[number]
 
+export const MESSAGE_SENDER_TYPES = [
+  'customer',
+  'assistant',
+  'staff',
+] as const
+export type MessageSenderType = (typeof MESSAGE_SENDER_TYPES)[number]
+
 export const COMPLAINT_STATUSES = [
   'received',
   'analyzing',
@@ -116,6 +123,15 @@ export function isComplaintChannel(value: unknown): value is ComplaintChannel {
   return (
     typeof value === 'string' &&
     (COMPLAINT_CHANNELS as readonly string[]).includes(value)
+  )
+}
+
+export function isMessageSenderType(
+  value: unknown,
+): value is MessageSenderType {
+  return (
+    typeof value === 'string' &&
+    (MESSAGE_SENDER_TYPES as readonly string[]).includes(value)
   )
 }
 
