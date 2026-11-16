@@ -5,11 +5,13 @@ import uuid
 from app.models.complaint import Complaint
 from app.models.complaint_history import ComplaintHistory
 from app.models.completion_report import CompletionReport
+from app.models.conversation import Conversation
 from app.models.customer import Customer
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
 from app.models.enums import WorkflowRunType
 from app.models.equipment import Equipment
+from app.models.message import Message
 from app.models.service_record import ServiceRecord
 from app.models.technician import Technician
 from app.models.technician_assignment import TechnicianAssignment
@@ -25,6 +27,10 @@ from app.schemas.assignments.assignment import (
 from app.schemas.complaints.complaint import (
     ComplaintHistoryResponse,
     ComplaintResponse,
+)
+from app.schemas.conversations.conversation import (
+    ConversationResponse,
+    MessageResponse,
 )
 from app.schemas.customers.customer import CustomerProfileResponse
 from app.schemas.diagnostics.diagnostic import (
@@ -127,6 +133,27 @@ def complaint_history_response(
         changed_fields=history.changed_fields,
         actor_id=history.actor_id,
         created_at=history.created_at,
+    )
+
+
+def conversation_response(
+    conversation: Conversation,
+) -> ConversationResponse:
+    return ConversationResponse(
+        id=conversation.id,
+        complaint_id=conversation.complaint_id,
+        channel=conversation.channel,
+        created_at=conversation.created_at,
+    )
+
+
+def message_response(message: Message) -> MessageResponse:
+    return MessageResponse(
+        id=message.id,
+        conversation_id=message.conversation_id,
+        sender_type=message.sender_type,
+        content=message.content,
+        created_at=message.created_at,
     )
 
 

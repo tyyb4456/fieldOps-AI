@@ -664,7 +664,7 @@ def test_clerk_identity_migration_downgrade_requires_password_hashes(
             )
         ).scalar_one()
 
-    assert version == "0018_workflow_proposal_run"
+    assert version == "0019_message_idempotency"
     assert clerk_user_id == "user_clerk_test"
 
 
@@ -967,7 +967,7 @@ def test_complaint_history_downgrade_refuses_and_requires_archival(
             )
         ).all()
 
-    assert version == "0018_workflow_proposal_run"
+    assert version == "0019_message_idempotency"
     assert count == 1
     assert archived[0].complaint_id == complaint_id
     assert archived[0].sequence_number == 1
@@ -1224,7 +1224,7 @@ def test_document_storage_migration_downgrade_refuses_storage_backed_rows(
             )
         ).scalar_one()
 
-    assert version == "0018_workflow_proposal_run"
+    assert version == "0019_message_idempotency"
     assert storage_key == "aa/abcd.pdf"
 
     with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
@@ -1361,7 +1361,7 @@ def test_document_integrity_migration_checksum_format_and_recovery_column(
             text("SELECT version_num FROM alembic_version")
         ).scalar_one()
 
-    assert version == "0018_workflow_proposal_run"
+    assert version == "0019_message_idempotency"
 
 def test_document_embeddings_migration_creates_pgvector_schema(
     empty_migration_database: MigrationDatabase,
@@ -1418,5 +1418,46 @@ def test_document_embeddings_migration_creates_pgvector_schema(
 
     assert table is None
     assert extension == "vector"
+
+    command.upgrade(empty_migration_database.config, "head")
+
+
+def test_message_idempotency_migration_adds_scoped_key_constraint(
+    empty_migration_database: MigrationDatabase,
+) -> None:
+    command.upgrade(empty_migration_database.config, "head")
+
+    with _sync_engine(empty_migration_database) as engine:
+        inspector = inspect(engine)
+        columns = {
+            column["name"]
+            for column in inspector.get_columns("messages")
+        }
+        uniques = {
+            unique["name"]
+            for unique in inspector.get_unique_constraints("messages")
+        }
+
+    assert "client_message_id" in columns
+    assert "uq_messages_conversation_client_message_id" in uniques
+
+    command.downgrade(
+        empty_migration_database.config,
+        "0018_workflow_proposal_run",
+    )
+
+    with _sync_engine(empty_migration_database) as engine:
+        inspector = inspect(engine)
+        columns = {
+            column["name"]
+            for column in inspector.get_columns("messages")
+        }
+        uniques = {
+            unique["name"]
+            for unique in inspector.get_unique_constraints("messages")
+        }
+
+    assert "client_message_id" not in columns
+    assert "uq_messages_conversation_client_message_id" not in uniques
 
     command.upgrade(empty_migration_database.config, "head")

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.complaint import Complaint
 from app.models.complaint_history import ComplaintHistory
+from app.models.conversation import Conversation
 from app.models.customer import Customer
 from app.models.enums import ComplaintStatus, Priority
 from app.schemas.complaints.complaint import ComplaintCreate, ComplaintUpdate
@@ -224,6 +225,18 @@ async def create_complaint(
     )
     session.add(complaint)
     await session.flush()
+
+    # Every complaint begins with one primary conversation for its intake
+    # channel. External channels may still attach additional conversations
+    # later; the model deliberately has no complaint-level uniqueness rule.
+    session.add(
+        Conversation(
+            complaint_id=complaint.id,
+            channel=data.channel,
+        )
+    )
+    await session.flush()
+
     await _append_history(
         session,
         complaint_id=complaint.id,

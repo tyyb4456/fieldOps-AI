@@ -6,14 +6,17 @@ from datetime import date
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.complaint import Complaint
+from app.models.conversation import Conversation
 from app.models.customer import Customer
 from app.models.enums import (
     ComplaintChannel,
     ComplaintStatus,
+    MessageSenderType,
     Priority,
     UserRole,
 )
 from app.models.equipment import Equipment
+from app.models.message import Message
 from app.models.technician import Technician
 from app.models.user import User
 from tests.conftest import make_clerk_token
@@ -95,6 +98,46 @@ async def seed_admin(
     session.add(user)
     await session.commit()
     return user, _token_for(subject)
+
+
+async def seed_conversation(
+    session: AsyncSession,
+    complaint: Complaint,
+    *,
+    channel: ComplaintChannel | None = None,
+    external_conversation_id: str | None = None,
+) -> Conversation:
+    conversation = Conversation(
+        complaint_id=complaint.id,
+        channel=channel or complaint.channel,
+        external_conversation_id=external_conversation_id,
+    )
+    session.add(conversation)
+    await session.commit()
+    return conversation
+
+
+async def seed_message(
+    session: AsyncSession,
+    conversation: Conversation,
+    *,
+    sender_type: MessageSenderType = MessageSenderType.CUSTOMER,
+    content: str = "Seeded message.",
+    client_message_id: str | None = None,
+    created_at: object | None = None,
+) -> Message:
+    values: dict[str, object] = {
+        "conversation_id": conversation.id,
+        "sender_type": sender_type,
+        "content": content,
+        "client_message_id": client_message_id,
+    }
+    if created_at is not None:
+        values["created_at"] = created_at
+    message = Message(**values)
+    session.add(message)
+    await session.commit()
+    return message
 
 
 async def seed_equipment(

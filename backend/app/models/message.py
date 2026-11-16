@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, Index, String, Text
+from sqlalchemy import ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, CreatedAtMixin, UUIDPrimaryKeyMixin
@@ -17,6 +17,11 @@ class Message(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     __tablename__ = "messages"
     __table_args__ = (
         Index("ix_messages_conversation_id", "conversation_id"),
+        UniqueConstraint(
+            "conversation_id",
+            "client_message_id",
+            name="uq_messages_conversation_client_message_id",
+        ),
     )
 
     conversation_id: Mapped[uuid.UUID] = mapped_column(
@@ -37,6 +42,10 @@ class Message(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         String(255),
         nullable=True,
         unique=True,
+    )
+    client_message_id: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
     )
 
     conversation: Mapped[Conversation] = relationship(

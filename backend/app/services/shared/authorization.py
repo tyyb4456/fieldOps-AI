@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.complaint import Complaint
 from app.models.completion_report import CompletionReport
+from app.models.conversation import Conversation
 from app.models.customer import Customer
 from app.models.enums import AssignmentStatus, UserRole
 from app.models.equipment import Equipment
@@ -77,6 +78,60 @@ def scope_complaints_for_user(user: User) -> Select[Complaint]:
         return scope_complaints_for_customer(user.customer.id)
 
     return select(Complaint).where(false())
+
+
+def scope_conversations_for_customer(
+    customer_id: uuid.UUID,
+) -> Select[Conversation]:
+    return select(Conversation).where(
+        Conversation.complaint_id.in_(
+            select(Complaint.id).where(
+                Complaint.customer_id == customer_id
+            )
+        )
+    )
+
+
+def scope_conversations_for_user(user: User) -> Select[Conversation]:
+    statement = select(Conversation)
+
+    if is_admin(user):
+        return statement
+
+    if is_customer(user):
+        return select(Conversation).where(
+            Conversation.complaint_id.in_(
+                select(Complaint.id)
+                .join(
+                    Customer,
+                    Complaint.customer_id == Customer.id,
+                )
+                .where(Customer.user_id == user.id)
+            )
+        )
+
+    if is_technician(user):
+        return statement.where(
+            Conversation.complaint_id.in_(
+                select(WorkOrder.complaint_id)
+                .join(
+                    TechnicianAssignment,
+                    TechnicianAssignment.work_order_id == WorkOrder.id,
+                )
+                .join(
+                    Technician,
+                    TechnicianAssignment.technician_id == Technician.id,
+                )
+                .where(
+                    Technician.user_id == user.id,
+                    TechnicianAssignment.assignment_status.in_(
+                        TECHNICIAN_VISIBLE_ASSIGNMENT_STATUSES
+                    ),
+                )
+            )
+        )
+
+    return statement.where(false())
 
 
 def scope_work_orders_for_user(user: User) -> Select[WorkOrder]:

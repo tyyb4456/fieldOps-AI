@@ -6,6 +6,10 @@ from app.api.routes import admin, health
 from app.api.routes.accounts import auth, users
 from app.api.routes.assignments import assignments
 from app.api.routes.complaints import complaints
+from app.api.routes.conversations import (
+    customer_conversations,
+    staff_conversations,
+)
 from app.api.routes.customers import customers
 from app.api.routes.diagnostics import diagnostics
 from app.api.routes.documents import documents
@@ -27,6 +31,8 @@ api_router.include_router(users.router)
 api_router.include_router(customers.router)
 api_router.include_router(equipment.router)
 api_router.include_router(complaints.router)
+api_router.include_router(customer_conversations.router)
+api_router.include_router(staff_conversations.router)
 api_router.include_router(admin.router)
 api_router.include_router(work_orders.router)
 api_router.include_router(work_order_proposals.router)
