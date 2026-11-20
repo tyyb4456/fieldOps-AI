@@ -34,6 +34,7 @@ from app.services.assignments.assignments import (
     InvalidAssignmentStateError,
     is_active_assignment_conflict,
 )
+from app.services.complaints.lifecycle import PendingProposalConflictError
 from app.services.work_orders import work_orders as work_order_service
 from app.services.work_orders.work_orders import (
     InvalidComplaintConversionError,
@@ -60,6 +61,15 @@ def _invalid_complaint_state_error() -> AppError:
         "Complaint is not eligible for work-order conversion.",
         status_code=status.HTTP_409_CONFLICT,
         code="invalid_complaint_state",
+    )
+
+
+def _pending_proposal_conflict_error() -> AppError:
+    return AppError(
+        "A pending work-order proposal must be resolved before direct "
+        "conversion.",
+        status_code=status.HTTP_409_CONFLICT,
+        code="pending_proposal_conflict",
     )
 
 
@@ -182,6 +192,9 @@ async def create_work_order(
     except WorkOrderAlreadyExistsError as exc:
         await session.rollback()
         raise _work_order_conflict_error() from exc
+    except PendingProposalConflictError as exc:
+        await session.rollback()
+        raise _pending_proposal_conflict_error() from exc
     except InvalidComplaintConversionError as exc:
         await session.rollback()
         raise _invalid_complaint_state_error() from exc

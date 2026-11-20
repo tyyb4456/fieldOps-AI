@@ -111,6 +111,7 @@ EXPECTED_RELATIONSHIPS = {
         "selected_technician",
         "created_by",
         "reviewed_by",
+        "superseded_by",
         "resulting_work_order",
         "resulting_assignment",
     },

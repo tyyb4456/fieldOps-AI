@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import uuid
+from datetime import UTC, datetime
+
 import pytest
 from pydantic import ValidationError
 
@@ -60,6 +63,8 @@ ENV_KEYS = (
     "CELERY_TASK_SOFT_TIME_LIMIT_SECONDS",
     "CELERY_OUTBOX_DISPATCH_LIMIT",
     "CELERY_OUTBOX_MAX_PUBLISH_ATTEMPTS",
+    "LIFECYCLE_READINESS_ENFORCED_AT",
+    "LIFECYCLE_LEGACY_READY_IDS",
 )
 
 PRODUCTION_DATABASE_URL = (
@@ -151,6 +156,9 @@ def test_default_settings(monkeypatch: pytest.MonkeyPatch) -> None:
         settings.celery_outbox_max_publish_attempts
         == DEFAULT_CELERY_OUTBOX_MAX_PUBLISH_ATTEMPTS
     )
+    assert settings.lifecycle_readiness_enforced_at is None
+    assert settings.lifecycle_legacy_ready_ids == ""
+    assert settings.lifecycle_legacy_ready_id_set == frozenset()
 
 
 @pytest.mark.parametrize(
@@ -543,3 +551,76 @@ def test_celery_settings_are_bounded_and_ordered() -> None:
             celery_task_retry_backoff_seconds=120,
             celery_task_retry_backoff_max_seconds=60,
         )
+
+
+def test_lifecycle_readiness_cutoff_accepts_timezone_aware_timestamp() -> None:
+    settings = Settings(
+        _env_file=None,
+        lifecycle_readiness_enforced_at="2026-01-01T00:00:00+02:00",
+    )
+
+    assert settings.lifecycle_readiness_enforced_at == datetime(
+        2025,
+        12,
+        31,
+        22,
+        0,
+        tzinfo=UTC,
+    )
+
+
+def test_lifecycle_readiness_cutoff_blank_is_disabled() -> None:
+    settings = Settings(
+        _env_file=None,
+        lifecycle_readiness_enforced_at="   ",
+    )
+
+    assert settings.lifecycle_readiness_enforced_at is None
+
+
+def test_lifecycle_readiness_cutoff_rejects_naive_timestamp() -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            lifecycle_readiness_enforced_at="2026-01-01T00:00:00",
+        )
+
+
+def test_lifecycle_legacy_ready_ids_rejects_invalid_uuid() -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            lifecycle_legacy_ready_ids="not-a-uuid",
+        )
+
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            lifecycle_legacy_ready_ids=(
+                f"{uuid.uuid4()},also-not-a-uuid"
+            ),
+        )
+
+
+def test_lifecycle_legacy_ready_ids_empty_allowlist() -> None:
+    for value in ("", "   ", " , , "):
+        settings = Settings(
+            _env_file=None,
+            lifecycle_legacy_ready_ids=value,
+        )
+        assert settings.lifecycle_legacy_ready_ids == ""
+        assert settings.lifecycle_legacy_ready_id_set == frozenset()
+
+
+def test_lifecycle_legacy_ready_ids_deduplicates_and_normalizes() -> None:
+    identifier = uuid.UUID("12345678-1234-5678-1234-567812345678")
+    settings = Settings(
+        _env_file=None,
+        lifecycle_legacy_ready_ids=(
+            f" {str(identifier).upper()} , {identifier} , "
+            f"{str(identifier).upper()} "
+        ),
+    )
+
+    assert settings.lifecycle_legacy_ready_ids == str(identifier)
+    assert settings.lifecycle_legacy_ready_id_set == frozenset({identifier})

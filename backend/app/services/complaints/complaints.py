@@ -13,6 +13,11 @@ from app.models.conversation import Conversation
 from app.models.customer import Customer
 from app.models.enums import ComplaintStatus, Priority
 from app.schemas.complaints.complaint import ComplaintCreate, ComplaintUpdate
+from app.services.complaints import lifecycle_service
+from app.services.complaints.lifecycle import (
+    ComplaintLifecycleError,
+    LifecycleActor,
+)
 from app.services.equipment.equipment import get_equipment_for_customer
 from app.services.shared.authorization import AccessDeniedError
 
@@ -136,11 +141,7 @@ async def _lock_complaint_row(
     history-writing path must acquire it before allocating a sequence so two
     concurrent transactions can never observe the same maximum sequence.
     """
-    await session.execute(
-        select(Complaint.id)
-        .where(Complaint.id == complaint_id)
-        .with_for_update()
-    )
+    await lifecycle_service.lock_complaint_row(session, complaint_id)
 
 
 async def _append_history(
@@ -153,24 +154,15 @@ async def _append_history(
     changed_fields: dict[str, Any],
     actor_id: uuid.UUID | None,
 ) -> ComplaintHistory:
-    await _lock_complaint_row(session, complaint_id)
-    last_sequence = await session.scalar(
-        select(func.max(ComplaintHistory.sequence_number)).where(
-            ComplaintHistory.complaint_id == complaint_id
-        )
-    )
-    entry = ComplaintHistory(
+    return await lifecycle_service.append_history(
+        session,
         complaint_id=complaint_id,
-        sequence_number=int(last_sequence or 0) + 1,
         event_type=event_type,
         from_status=from_status,
         to_status=to_status,
         changed_fields=changed_fields,
         actor_id=actor_id,
     )
-    session.add(entry)
-    await session.flush()
-    return entry
 
 
 async def append_complaint_history(
@@ -292,29 +284,20 @@ async def cancel_complaint(
     complaint: Complaint,
     *,
     actor_id: uuid.UUID | None = None,
+    actor: LifecycleActor | str = LifecycleActor.CUSTOMER,
 ) -> Complaint:
     # Service-level lock so internal callers get the same serialization
     # guarantee as the HTTP routes, which already load with FOR UPDATE.
     await session.refresh(complaint, with_for_update=True)
-    previous_status = complaint.status
-    validate_customer_transition(
-        previous_status,
-        ComplaintStatus.CANCELLED,
-    )
-    complaint.status = ComplaintStatus.CANCELLED
-    await _append_history(
-        session,
-        complaint_id=complaint.id,
-        event_type="cancelled",
-        from_status=previous_status,
-        to_status=ComplaintStatus.CANCELLED,
-        changed_fields={
-            "status": {
-                "from": previous_status.value,
-                "to": ComplaintStatus.CANCELLED.value,
-            }
-        },
-        actor_id=actor_id,
-    )
+    try:
+        result = await lifecycle_service.transition_locked_complaint(
+            session,
+            complaint=complaint,
+            target_status=ComplaintStatus.CANCELLED,
+            actor=actor,
+            actor_id=actor_id,
+        )
+    except ComplaintLifecycleError as exc:
+        raise InvalidComplaintTransitionError(str(exc)) from exc
     await session.flush()
-    return complaint
+    return result.complaint

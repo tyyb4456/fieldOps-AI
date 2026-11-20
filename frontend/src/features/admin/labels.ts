@@ -11,12 +11,14 @@ export const PROPOSAL_STATUS_LABELS: Record<WorkOrderProposalStatus, string> = {
   pending_approval: 'Pending approval',
   approved: 'Approved',
   rejected: 'Rejected',
+  superseded: 'Superseded',
 }
 
 const PROPOSAL_STATUS_TONES: Record<WorkOrderProposalStatus, BadgeTone> = {
   pending_approval: 'warning',
   approved: 'success',
   rejected: 'neutral',
+  superseded: 'neutral',
 }
 
 export const WORKFLOW_STATUS_LABELS: Record<WorkflowRunStatus, string> = {

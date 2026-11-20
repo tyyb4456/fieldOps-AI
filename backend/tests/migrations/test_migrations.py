@@ -125,6 +125,9 @@ def test_expected_constraints_and_indexes_exist(
             for column in inspector.get_columns("work_order_proposals")
         }
         assert proposal_columns["source_workflow_run_id"]["nullable"] is True
+        assert proposal_columns["superseded_at"]["nullable"] is True
+        assert proposal_columns["superseded_by_id"]["nullable"] is True
+        assert proposal_columns["supersession_reason"]["nullable"] is True
 
         proposal_uniques = {
             unique["name"]
@@ -141,6 +144,12 @@ def test_expected_constraints_and_indexes_exist(
         ]
         assert source_run_fk["referred_table"] == "workflow_runs"
         assert source_run_fk["options"].get("ondelete") == "RESTRICT"
+
+        superseded_by_fk = proposal_fks[
+            "fk_work_order_proposals_superseded_by_id_users"
+        ]
+        assert superseded_by_fk["referred_table"] == "users"
+        assert superseded_by_fk["options"].get("ondelete") == "SET NULL"
 
 
         complaint_fks = {
@@ -664,7 +673,7 @@ def test_clerk_identity_migration_downgrade_requires_password_hashes(
             )
         ).scalar_one()
 
-    assert version == "0019_message_idempotency"
+    assert version == "0020_proposal_supersession"
     assert clerk_user_id == "user_clerk_test"
 
 
@@ -967,7 +976,7 @@ def test_complaint_history_downgrade_refuses_and_requires_archival(
             )
         ).all()
 
-    assert version == "0019_message_idempotency"
+    assert version == "0020_proposal_supersession"
     assert count == 1
     assert archived[0].complaint_id == complaint_id
     assert archived[0].sequence_number == 1
@@ -1224,7 +1233,7 @@ def test_document_storage_migration_downgrade_refuses_storage_backed_rows(
             )
         ).scalar_one()
 
-    assert version == "0019_message_idempotency"
+    assert version == "0020_proposal_supersession"
     assert storage_key == "aa/abcd.pdf"
 
     with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
@@ -1361,7 +1370,7 @@ def test_document_integrity_migration_checksum_format_and_recovery_column(
             text("SELECT version_num FROM alembic_version")
         ).scalar_one()
 
-    assert version == "0019_message_idempotency"
+    assert version == "0020_proposal_supersession"
 
 def test_document_embeddings_migration_creates_pgvector_schema(
     empty_migration_database: MigrationDatabase,
@@ -1461,3 +1470,141 @@ def test_message_idempotency_migration_adds_scoped_key_constraint(
     assert "uq_messages_conversation_client_message_id" not in uniques
 
     command.upgrade(empty_migration_database.config, "head")
+
+
+def test_proposal_supersession_migration_adds_state_and_columns(
+    empty_migration_database: MigrationDatabase,
+) -> None:
+    command.upgrade(empty_migration_database.config, "head")
+
+    with _sync_engine(empty_migration_database) as engine:
+        inspector = inspect(engine)
+        columns = {
+            column["name"]
+            for column in inspector.get_columns("work_order_proposals")
+        }
+        checks = {
+            check["name"]: check["sqltext"]
+            for check in inspector.get_check_constraints("work_order_proposals")
+        }
+
+    assert {
+        "superseded_at",
+        "superseded_by_id",
+        "supersession_reason",
+    } <= columns
+    assert "superseded" in checks[
+        "ck_work_order_proposals_work_order_proposal_status"
+    ]
+
+    command.downgrade(
+        empty_migration_database.config,
+        "0019_message_idempotency",
+    )
+
+    with _sync_engine(empty_migration_database) as engine:
+        inspector = inspect(engine)
+        columns = {
+            column["name"]
+            for column in inspector.get_columns("work_order_proposals")
+        }
+        checks = {
+            check["name"]: check["sqltext"]
+            for check in inspector.get_check_constraints("work_order_proposals")
+        }
+
+    assert "superseded_at" not in columns
+    assert "superseded_by_id" not in columns
+    assert "supersession_reason" not in columns
+    assert "superseded" not in checks[
+        "ck_work_order_proposals_work_order_proposal_status"
+    ]
+
+    command.upgrade(empty_migration_database.config, "head")
+
+
+def test_proposal_supersession_downgrade_refuses_superseded_rows(
+    empty_migration_database: MigrationDatabase,
+) -> None:
+    command.upgrade(empty_migration_database.config, "head")
+
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        user_id = connection.execute(
+            text(
+                "INSERT INTO users (full_name, email, role) "
+                "VALUES ('Supersession Owner', :email, 'customer') "
+                "RETURNING id"
+            ),
+            {"email": f"supersede_{uuid.uuid4().hex}@example.com"},
+        ).scalar_one()
+        customer_id = connection.execute(
+            text("INSERT INTO customers (user_id) VALUES (:user_id) RETURNING id"),
+            {"user_id": user_id},
+        ).scalar_one()
+        equipment_id = connection.execute(
+            text(
+                "INSERT INTO equipment "
+                "(customer_id, manufacturer, model, serial_number, "
+                "equipment_type) VALUES (:customer_id, 'Acme', "
+                "'INV-7000', :serial, 'solar_inverter') RETURNING id"
+            ),
+            {
+                "customer_id": customer_id,
+                "serial": uuid.uuid4().hex[:12],
+            },
+        ).scalar_one()
+        complaint_id = connection.execute(
+            text(
+                "INSERT INTO complaints "
+                "(customer_id, equipment_id, description, channel, "
+                "status) VALUES (:customer_id, :equipment_id, "
+                "'Superseded complaint', 'web', 'received') RETURNING id"
+            ),
+            {
+                "customer_id": customer_id,
+                "equipment_id": equipment_id,
+            },
+        ).scalar_one()
+        connection.execute(
+            text(
+                "INSERT INTO work_order_proposals "
+                "(complaint_id, status, title, problem_description, "
+                "proposed_scope, technical_findings, priority, "
+                "diagnostic_status, diagnostic_summary, supersession_reason) "
+                "VALUES (:complaint_id, 'superseded', 'Inspect inverter', "
+                "'Inverter offline', 'Diagnose and repair', 'No output', "
+                "'normal', 'complete', 'Diagnosis complete', "
+                "'complaint_status_changed:received')"
+            ),
+            {"complaint_id": complaint_id},
+        )
+
+    with pytest.raises(RuntimeError, match="superseded"):
+        command.downgrade(
+            empty_migration_database.config,
+            "0019_message_idempotency",
+        )
+
+    with _sync_engine(empty_migration_database) as engine, engine.begin() as connection:
+        version = connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one()
+        columns = {
+            column["name"]
+            for column in inspect(engine).get_columns("work_order_proposals")
+        }
+        connection.execute(
+            text("DELETE FROM work_order_proposals WHERE status = 'superseded'")
+        )
+
+    assert version == "0020_proposal_supersession"
+    assert "superseded_at" in columns
+    assert "superseded_by_id" in columns
+    assert "supersession_reason" in columns
+
+    command.downgrade(
+        empty_migration_database.config,
+        "0019_message_idempotency",
+    )
+    command.upgrade(empty_migration_database.config, "head")
+

@@ -89,6 +89,7 @@ class WorkOrderProposalStatus(str, PyEnum):
     PENDING_APPROVAL = "pending_approval"
     APPROVED = "approved"
     REJECTED = "rejected"
+    SUPERSEDED = "superseded"
 
 
 class IngestionStatus(str, PyEnum):

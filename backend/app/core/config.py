@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+from datetime import UTC, datetime
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
@@ -211,6 +213,13 @@ class Settings(BaseSettings):
         le=100,
     )
 
+    # Bounded legacy-readiness compatibility for complaints that reached
+    # ready_for_work_order before lifecycle readiness enforcement existed.
+    # Both values must be configured explicitly; neither is inferred from row
+    # timestamps. See Step 4.13.0 Section F.7.
+    lifecycle_readiness_enforced_at: datetime | None = None
+    lifecycle_legacy_ready_ids: str = ""
+
     auth_bootstrap_rate_limit_per_ip: int = Field(default=30, ge=1)
     auth_bootstrap_rate_limit_per_subject: int = Field(default=10, ge=1)
     auth_bootstrap_rate_limit_window_seconds: int = Field(
@@ -384,6 +393,50 @@ class Settings(BaseSettings):
         if not version:
             raise ValueError("DOCUMENT_INGESTION_VERSION must not be blank")
         return version
+
+    @field_validator("lifecycle_readiness_enforced_at", mode="before")
+    @classmethod
+    def normalize_lifecycle_readiness_enforced_at(
+        cls,
+        value: object,
+    ) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator("lifecycle_readiness_enforced_at")
+    @classmethod
+    def validate_lifecycle_readiness_enforced_at(
+        cls,
+        value: datetime | None,
+    ) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(
+                "LIFECYCLE_READINESS_ENFORCED_AT must include a timezone"
+            )
+        return value.astimezone(UTC)
+
+    @field_validator("lifecycle_legacy_ready_ids")
+    @classmethod
+    def validate_lifecycle_legacy_ready_ids(cls, value: str) -> str:
+        identifiers: list[str] = []
+        for item in value.split(","):
+            candidate = item.strip()
+            if not candidate:
+                continue
+            try:
+                identifiers.append(str(uuid.UUID(candidate)))
+            except ValueError as exc:
+                raise ValueError(
+                    "LIFECYCLE_LEGACY_READY_IDS must be a comma-separated "
+                    "list of complaint UUIDs"
+                ) from exc
+        return ",".join(dict.fromkeys(identifiers))
 
     @field_validator(
         "redis_url",
@@ -616,6 +669,14 @@ class Settings(BaseSettings):
             for party in self.clerk_authorized_parties.split(",")
             if party.strip()
         ]
+
+    @property
+    def lifecycle_legacy_ready_id_set(self) -> frozenset[uuid.UUID]:
+        return frozenset(
+            uuid.UUID(item)
+            for item in self.lifecycle_legacy_ready_ids.split(",")
+            if item
+        )
 
     @property
     def effective_celery_broker_url(self) -> str:

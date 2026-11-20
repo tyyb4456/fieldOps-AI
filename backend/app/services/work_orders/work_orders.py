@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.models.complaint import Complaint
 from app.models.enums import (
     AssignmentStatus,
     ComplaintStatus,
@@ -23,7 +24,8 @@ from app.schemas.work_orders.work_order import (
     WorkOrderCreate,
     WorkOrderUpdate,
 )
-from app.services.complaints import complaints as complaint_service
+from app.services.complaints import lifecycle_service
+from app.services.complaints.lifecycle import PendingProposalConflictError
 from app.services.shared.authorization import (
     AccessDeniedError,
     get_work_order_for_user,
@@ -206,12 +208,38 @@ async def create_work_order_from_complaint(
     The complaint row lock serializes concurrent conversions, so only one
     transaction can observe the eligible status. The unique constraint on
     ``work_orders.complaint_id`` is the database backstop.
+
+    A pending proposal blocks direct conversion: approving it or letting a
+    status transition supersede it is the only deterministic resolution.
     """
-    complaint = await complaint_service.get_complaint(
+    complaint = await lifecycle_service.lock_complaint(session, complaint_id)
+
+    pending = await lifecycle_service.find_pending_proposal(
         session,
-        complaint_id,
-        for_update=True,
+        complaint.id,
     )
+    if pending is not None:
+        raise PendingProposalConflictError(
+            "A pending work-order proposal must be resolved before direct "
+            "conversion."
+        )
+
+    return await convert_locked_complaint(
+        session,
+        complaint=complaint,
+        data=data,
+        actor_id=actor_id,
+    )
+
+
+async def convert_locked_complaint(
+    session: AsyncSession,
+    *,
+    complaint: Complaint,
+    data: WorkOrderCreate,
+    actor_id: uuid.UUID,
+) -> WorkOrder:
+    """Create a work order for an already locked, eligible complaint."""
 
     existing = await session.scalar(
         select(WorkOrder).where(
@@ -239,6 +267,12 @@ async def create_work_order_from_complaint(
             "Complaint equipment does not belong to the complaint customer"
         )
 
+    await lifecycle_service.convert_locked_complaint(
+        session,
+        complaint=complaint,
+        actor_id=actor_id,
+    )
+
     work_order = WorkOrder(
         complaint_id=complaint.id,
         equipment_id=complaint.equipment_id,
@@ -249,24 +283,6 @@ async def create_work_order_from_complaint(
         status=WorkOrderStatus.DRAFT,
     )
     session.add(work_order)
-    await session.flush()
-
-    previous_status = complaint.status
-    complaint.status = ComplaintStatus.CONVERTED
-    await complaint_service.append_complaint_history(
-        session,
-        complaint_id=complaint.id,
-        event_type="converted",
-        from_status=previous_status,
-        to_status=ComplaintStatus.CONVERTED,
-        changed_fields={
-            "status": {
-                "from": previous_status.value,
-                "to": ComplaintStatus.CONVERTED.value,
-            }
-        },
-        actor_id=actor_id,
-    )
     await session.flush()
     return work_order
 

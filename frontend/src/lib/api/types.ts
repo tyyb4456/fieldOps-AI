@@ -71,6 +71,7 @@ export const WORK_ORDER_PROPOSAL_STATUSES = [
   'pending_approval',
   'approved',
   'rejected',
+  'superseded',
 ] as const
 export type WorkOrderProposalStatus =
   (typeof WORK_ORDER_PROPOSAL_STATUSES)[number]

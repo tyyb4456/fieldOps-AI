@@ -141,6 +141,18 @@ export function AdminProposalDetailPage() {
 
       {notice ? <Notice>{notice}</Notice> : null}
 
+      {proposal.status === 'superseded' ? (
+        <section className="rounded-2xl border border-slate-700 bg-slate-800/40 p-5">
+          <h2 className="text-base font-semibold text-slate-200">
+            Superseded proposal
+          </h2>
+          <p className="mt-2 text-sm text-slate-300">
+            This proposal was invalidated when the complaint changed status. It
+            is retained for history only and cannot be approved or rejected.
+          </p>
+        </section>
+      ) : null}
+
       <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
         <div className="flex flex-wrap items-center gap-2">
           <ProposalStatusBadge status={proposal.status} />

@@ -8,13 +8,17 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.complaint_history import ComplaintHistory
 from app.models.enums import (
     AssignmentStatus,
     ComplaintStatus,
+    Priority,
+    WorkOrderProposalStatus,
     WorkOrderStatus,
 )
 from app.models.technician_assignment import TechnicianAssignment
 from app.models.work_order import WorkOrder
+from app.models.work_order_proposal import WorkOrderProposal
 from tests.support import (
     bearer,
     seed_admin,
@@ -151,6 +155,75 @@ async def test_admin_converts_complaint_once(
     )
     assert customer_view.status_code == 200
     assert customer_view.json()["id"] == body["id"]
+
+
+async def test_direct_conversion_with_pending_proposal_returns_conflict(
+    api_client,
+    migrated_db_session: AsyncSession,
+) -> None:
+    (
+        customer,
+        _,
+        _,
+        _,
+        admin_token,
+    ) = await _seed_ready_complaint(migrated_db_session)
+    from app.models.complaint import Complaint
+
+    complaint = await migrated_db_session.scalar(
+        select(Complaint).where(Complaint.customer_id == customer.id)
+    )
+    assert complaint is not None
+    complaint_id = complaint.id
+    proposal = WorkOrderProposal(
+        complaint_id=complaint_id,
+        status=WorkOrderProposalStatus.PENDING_APPROVAL,
+        title="Inspect inverter",
+        problem_description="Inverter offline",
+        proposed_scope="Diagnose and repair",
+        technical_findings="No DC output",
+        priority=Priority.NORMAL,
+        diagnostic_status="diagnosed",
+        diagnostic_summary="Diagnosis complete",
+    )
+    migrated_db_session.add(proposal)
+    await migrated_db_session.commit()
+    proposal_id = proposal.id
+
+    response = await api_client.post(
+        f"/api/v1/admin/complaints/{complaint_id}/work-orders",
+        headers=bearer(admin_token),
+        json=WORK_ORDER_PAYLOAD,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "pending_proposal_conflict"
+
+    await migrated_db_session.rollback()
+    migrated_db_session.expire_all()
+    complaint = await migrated_db_session.get(Complaint, complaint_id)
+    proposal = await migrated_db_session.get(WorkOrderProposal, proposal_id)
+    assert complaint is not None
+    assert proposal is not None
+    assert complaint.status is ComplaintStatus.READY_FOR_WORK_ORDER
+    assert proposal.status is WorkOrderProposalStatus.PENDING_APPROVAL
+
+    history_count = await migrated_db_session.scalar(
+        select(func.count())
+        .select_from(ComplaintHistory)
+        .where(ComplaintHistory.complaint_id == complaint_id)
+    )
+    work_order_count = await migrated_db_session.scalar(
+        select(func.count())
+        .select_from(WorkOrder)
+        .where(WorkOrder.complaint_id == complaint_id)
+    )
+    assignment_count = await migrated_db_session.scalar(
+        select(func.count()).select_from(TechnicianAssignment)
+    )
+    assert history_count == 0
+    assert work_order_count == 0
+    assert assignment_count == 0
 
 
 async def test_customer_cannot_use_admin_work_order_endpoints(

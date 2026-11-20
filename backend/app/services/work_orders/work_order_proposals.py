@@ -47,6 +47,7 @@ from app.services.assignments.technician_recommendation import (
     recommendation_snapshot,
     required_skills_for_equipment,
 )
+from app.services.complaints import lifecycle_service
 from app.services.diagnostics.diagnostics import (
     DiagnosticService,
     get_complaint_for_operations_user,
@@ -252,32 +253,14 @@ async def _lock_proposal(
     session: AsyncSession,
     proposal_id: uuid.UUID,
 ) -> WorkOrderProposal:
-    result = await session.execute(
-        select(WorkOrderProposal)
-        .where(WorkOrderProposal.id == proposal_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    )
-    proposal = result.scalar_one_or_none()
-    if proposal is None:
-        raise AccessDeniedError("Work order proposal not found")
-    return proposal
+    return await lifecycle_service.lock_proposal(session, proposal_id)
 
 
 async def _lock_complaint(
     session: AsyncSession,
     complaint_id: uuid.UUID,
 ) -> Complaint:
-    result = await session.execute(
-        select(Complaint)
-        .where(Complaint.id == complaint_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    )
-    complaint = result.scalar_one_or_none()
-    if complaint is None:
-        raise AccessDeniedError("Complaint not found")
-    return complaint
+    return await lifecycle_service.lock_complaint(session, complaint_id)
 
 
 async def _load_current_equipment(
@@ -845,14 +828,26 @@ class WorkOrderProposalService:
         technician_id: uuid.UUID | None,
     ) -> WorkOrderProposal:
         require_admin(admin)
+
+        # Route to the complaint without a lock, then follow the authoritative
+        # lock order: complaint -> readiness run (later step) -> proposal.
+        routed = await session.get(WorkOrderProposal, proposal_id)
+        if routed is None:
+            raise AccessDeniedError("Work order proposal not found")
+
+        complaint = await _lock_complaint(session, routed.complaint_id)
         proposal = await _lock_proposal(session, proposal_id)
+
+        if proposal.complaint_id != complaint.id:
+            raise InvalidProposalStateError(
+                "The proposal no longer belongs to the complaint."
+            )
 
         if proposal.status is not WorkOrderProposalStatus.PENDING_APPROVAL:
             raise InvalidProposalStateError(
                 "Only a pending proposal can be approved."
             )
 
-        complaint = await _lock_complaint(session, proposal.complaint_id)
         if complaint.status not in COMPLAINT_STATUSES_ELIGIBLE_FOR_PROPOSAL:
             raise InvalidProposalStateError(
                 "The complaint is no longer eligible for work-order conversion."
@@ -889,9 +884,9 @@ class WorkOrderProposalService:
 
         try:
             work_order = (
-                await work_order_service.create_work_order_from_complaint(
+                await work_order_service.convert_locked_complaint(
                     session,
-                    complaint_id=complaint.id,
+                    complaint=complaint,
                     data=WorkOrderCreate(
                         title=proposal.title,
                         description=proposal.problem_description,

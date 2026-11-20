@@ -207,6 +207,21 @@ class WorkOrderProposal(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
         Text,
         nullable=True,
     )
+    # System supersession is distinct from human rejection. These fields never
+    # replace the review fields above: an actorless invalidation leaves
+    # reviewed_by_id/reviewed_at null.
+    superseded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    superseded_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    supersession_reason: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
     resulting_work_order_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("work_orders.id", ondelete="SET NULL"),
         nullable=True,
@@ -228,6 +243,9 @@ class WorkOrderProposal(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
     )
     reviewed_by: Mapped[User | None] = relationship(
         foreign_keys=[reviewed_by_id],
+    )
+    superseded_by: Mapped[User | None] = relationship(
+        foreign_keys=[superseded_by_id],
     )
     resulting_work_order: Mapped[WorkOrder | None] = relationship(
         foreign_keys=[resulting_work_order_id],
