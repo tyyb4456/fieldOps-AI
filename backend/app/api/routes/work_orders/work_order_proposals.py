@@ -31,6 +31,10 @@ from app.schemas.work_orders.work_order_proposal import (
 )
 from app.schemas.workflow_runs.workflow_run import WorkflowRunAcceptedResponse
 from app.services.assignments.assignments import is_active_assignment_conflict
+from app.services.complaints.lifecycle import (
+    ComplaintLifecycleError,
+    http_status_for_error,
+)
 from app.services.rag.vector_index import VectorIndex
 from app.services.work_orders.work_order_proposals import (
     InvalidProposalStateError,
@@ -220,6 +224,13 @@ async def approve_work_order_proposal(
     except ProposalStaleError as exc:
         await session.rollback()
         raise _proposal_stale_error() from exc
+    except ComplaintLifecycleError as exc:
+        await session.rollback()
+        raise AppError(
+            exc.message,
+            status_code=http_status_for_error(exc),
+            code=exc.code.value,
+        ) from exc
     except ProposalTechnicianNotEligibleError as exc:
         await session.rollback()
         raise _technician_not_eligible_error() from exc

@@ -25,7 +25,14 @@ from app.schemas.work_orders.work_order import (
     WorkOrderUpdate,
 )
 from app.services.complaints import lifecycle_service
-from app.services.complaints.lifecycle import PendingProposalConflictError
+from app.services.complaints.lifecycle import (
+    PendingProposalConflictError,
+    ReadinessOperation,
+)
+from app.services.complaints.readiness import (
+    ReadinessValidation,
+    validate_readiness_for_operation,
+)
 from app.services.shared.authorization import (
     AccessDeniedError,
     get_work_order_for_user,
@@ -238,8 +245,14 @@ async def convert_locked_complaint(
     complaint: Complaint,
     data: WorkOrderCreate,
     actor_id: uuid.UUID,
+    readiness_validation: ReadinessValidation | None = None,
 ) -> WorkOrder:
-    """Create a work order for an already locked, eligible complaint."""
+    """Create a work order for an already locked, eligible complaint.
+
+    The shared readiness validator runs after the complaint lock and before
+    any work-order or history write. Proposal approval passes its already
+    validated result so the readiness run is not locked after the proposal.
+    """
 
     existing = await session.scalar(
         select(WorkOrder).where(
@@ -267,10 +280,20 @@ async def convert_locked_complaint(
             "Complaint equipment does not belong to the complaint customer"
         )
 
+    validation = readiness_validation
+    if validation is None:
+        validation = await validate_readiness_for_operation(
+            session,
+            complaint,
+            operation=ReadinessOperation.DIRECT_CONVERSION,
+            actor_id=actor_id,
+        )
+
     await lifecycle_service.convert_locked_complaint(
         session,
         complaint=complaint,
         actor_id=actor_id,
+        changed_fields=validation.audit_fields,
     )
 
     work_order = WorkOrder(

@@ -35,6 +35,7 @@ from tests.support import (
     seed_complaint,
     seed_customer,
     seed_equipment,
+    seed_ready_complaint,
 )
 
 
@@ -350,13 +351,13 @@ async def test_postgres_supersession_racing_approval_does_not_deadlock(
 ) -> None:
     _, customer, _ = await seed_customer(committed_db_session)
     equipment = await seed_equipment(committed_db_session, customer)
-    complaint = await seed_complaint(
+    admin, _ = await seed_admin(committed_db_session)
+    complaint, _ = await seed_ready_complaint(
         committed_db_session,
         customer,
-        equipment=equipment,
-        status=ComplaintStatus.READY_FOR_WORK_ORDER,
+        equipment,
+        admin=admin,
     )
-    admin, _ = await seed_admin(committed_db_session)
     proposal = _proposal(
         complaint,
         context_snapshot={
@@ -432,13 +433,13 @@ async def test_postgres_approval_racing_cancellation_creates_one_work_order(
 ) -> None:
     _, customer, _ = await seed_customer(committed_db_session)
     equipment = await seed_equipment(committed_db_session, customer)
-    complaint = await seed_complaint(
+    admin, _ = await seed_admin(committed_db_session)
+    complaint, _ = await seed_ready_complaint(
         committed_db_session,
         customer,
-        equipment=equipment,
-        status=ComplaintStatus.READY_FOR_WORK_ORDER,
+        equipment,
+        admin=admin,
     )
-    admin, _ = await seed_admin(committed_db_session)
     proposal = _proposal(
         complaint,
         context_snapshot={

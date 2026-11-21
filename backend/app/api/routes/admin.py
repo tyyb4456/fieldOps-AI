@@ -23,6 +23,8 @@ from app.schemas.complaints.complaint import (
     ComplaintHistoryListResponse,
     ComplaintListResponse,
     ComplaintResponse,
+    ComplaintStatusTransitionRequest,
+    ComplaintStatusTransitionResponse,
 )
 from app.schemas.customers.customer import CustomerProfileResponse
 from app.schemas.equipment.equipment import (
@@ -32,6 +34,15 @@ from app.schemas.equipment.equipment import (
     EquipmentUpdate,
 )
 from app.services.complaints import complaints as complaint_service
+from app.services.complaints.admin_lifecycle import (
+    transition_complaint_as_admin,
+)
+from app.services.complaints.lifecycle import (
+    ComplaintLifecycleError,
+    LifecycleActor,
+    available_transitions,
+    http_status_for_error,
+)
 from app.services.customers.customers import get_customer_for_admin
 from app.services.equipment import equipment as equipment_service
 
@@ -305,6 +316,75 @@ async def read_complaint(
         complaint_id,
     )
     return complaint_response(complaint)
+
+
+@router.post(
+    "/complaints/{complaint_id}/status",
+    response_model=ComplaintStatusTransitionResponse,
+    summary="Admin: transition a complaint's lifecycle status",
+)
+async def transition_complaint_status(
+    complaint_id: uuid.UUID,
+    payload: ComplaintStatusTransitionRequest,
+    admin: User = Depends(require_admin_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> ComplaintStatusTransitionResponse:
+    fields = {
+        key: value
+        for key, value in {
+            "reason": payload.reason,
+            "reason_code": payload.reason_code,
+            "resolution_code": payload.resolution_code,
+            "resolution_summary": payload.resolution_summary,
+        }.items()
+        if value is not None
+    }
+
+    try:
+        transition = await transition_complaint_as_admin(
+            session,
+            complaint_id=complaint_id,
+            target_status=payload.status,
+            expected_status=payload.expected_status,
+            fields=fields,
+            actor_id=admin.id,
+            diagnostic_workflow_run_id=payload.diagnostic_workflow_run_id,
+        )
+        await session.commit()
+    except ComplaintLifecycleError as exc:
+        await session.rollback()
+        raise AppError(
+            exc.message,
+            status_code=http_status_for_error(exc),
+            code=exc.code.value,
+        ) from exc
+
+    await session.refresh(transition.complaint)
+    logger.info(
+        "Complaint status transitioned by admin",
+        extra={
+            "event": "complaint_status_transitioned",
+            "actor_id": str(admin.id),
+            "complaint_id": str(transition.complaint.id),
+            "from_status": (
+                transition.history.from_status.value
+                if transition.history.from_status is not None
+                else None
+            ),
+            "to_status": transition.complaint.status.value,
+            "history_sequence": transition.history.sequence_number,
+        },
+    )
+    return ComplaintStatusTransitionResponse(
+        complaint=complaint_response(transition.complaint),
+        history=complaint_history_response(transition.history),
+        available_transitions=list(
+            available_transitions(
+                transition.complaint.status,
+                LifecycleActor.ADMIN,
+            )
+        ),
+    )
 
 
 @router.get(

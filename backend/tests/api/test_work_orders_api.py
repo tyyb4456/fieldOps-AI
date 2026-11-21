@@ -22,9 +22,9 @@ from app.models.work_order_proposal import WorkOrderProposal
 from tests.support import (
     bearer,
     seed_admin,
-    seed_complaint,
     seed_customer,
     seed_equipment,
+    seed_ready_complaint,
     seed_technician,
 )
 
@@ -46,13 +46,13 @@ async def _seed_ready_complaint(
 ) -> tuple[object, object, str, object, str]:
     _, customer, customer_token = await seed_customer(session)
     equipment = await seed_equipment(session, customer)
-    await seed_complaint(
+    admin, admin_token = await seed_admin(session)
+    await seed_ready_complaint(
         session,
         customer,
-        equipment=equipment,
-        status=ComplaintStatus.READY_FOR_WORK_ORDER,
+        equipment,
+        admin=admin,
     )
-    admin, admin_token = await seed_admin(session)
     return customer, equipment, customer_token, admin, admin_token
 
 
@@ -189,6 +189,11 @@ async def test_direct_conversion_with_pending_proposal_returns_conflict(
     migrated_db_session.add(proposal)
     await migrated_db_session.commit()
     proposal_id = proposal.id
+    history_count_before = await migrated_db_session.scalar(
+        select(func.count())
+        .select_from(ComplaintHistory)
+        .where(ComplaintHistory.complaint_id == complaint_id)
+    )
 
     response = await api_client.post(
         f"/api/v1/admin/complaints/{complaint_id}/work-orders",
@@ -221,7 +226,7 @@ async def test_direct_conversion_with_pending_proposal_returns_conflict(
     assignment_count = await migrated_db_session.scalar(
         select(func.count()).select_from(TechnicianAssignment)
     )
-    assert history_count == 0
+    assert history_count == history_count_before
     assert work_order_count == 0
     assert assignment_count == 0
 

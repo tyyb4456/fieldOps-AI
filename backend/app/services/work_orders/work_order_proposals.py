@@ -48,6 +48,8 @@ from app.services.assignments.technician_recommendation import (
     required_skills_for_equipment,
 )
 from app.services.complaints import lifecycle_service
+from app.services.complaints.lifecycle import ReadinessOperation
+from app.services.complaints.readiness import validate_readiness_for_operation
 from app.services.diagnostics.diagnostics import (
     DiagnosticService,
     get_complaint_for_operations_user,
@@ -836,6 +838,28 @@ class WorkOrderProposalService:
             raise AccessDeniedError("Work order proposal not found")
 
         complaint = await _lock_complaint(session, routed.complaint_id)
+
+        if complaint.status not in COMPLAINT_STATUSES_ELIGIBLE_FOR_PROPOSAL:
+            raise InvalidProposalStateError(
+                "The complaint is no longer eligible for work-order conversion."
+            )
+        if complaint.equipment_id is None:
+            raise InvalidProposalStateError(
+                "The complaint no longer has identified equipment."
+            )
+
+        # Preserve the existing proposal-context contract before running the
+        # readiness gate. This is an unlocked pre-check; the same check is
+        # repeated after the proposal row lock below.
+        equipment = await _load_current_equipment(session, complaint)
+        _ensure_proposal_context_current(routed, complaint, equipment)
+
+        readiness_validation = await validate_readiness_for_operation(
+            session,
+            complaint,
+            operation=ReadinessOperation.PROPOSAL_APPROVAL,
+            actor_id=admin.id,
+        )
         proposal = await _lock_proposal(session, proposal_id)
 
         if proposal.complaint_id != complaint.id:
@@ -846,15 +870,6 @@ class WorkOrderProposalService:
         if proposal.status is not WorkOrderProposalStatus.PENDING_APPROVAL:
             raise InvalidProposalStateError(
                 "Only a pending proposal can be approved."
-            )
-
-        if complaint.status not in COMPLAINT_STATUSES_ELIGIBLE_FOR_PROPOSAL:
-            raise InvalidProposalStateError(
-                "The complaint is no longer eligible for work-order conversion."
-            )
-        if complaint.equipment_id is None:
-            raise InvalidProposalStateError(
-                "The complaint no longer has identified equipment."
             )
 
         equipment = await _load_current_equipment(session, complaint)
@@ -896,6 +911,7 @@ class WorkOrderProposalService:
                         priority=proposal.priority,
                     ),
                     actor_id=admin.id,
+                    readiness_validation=readiness_validation,
                 )
             )
         except work_order_service.WorkOrderAlreadyExistsError as exc:

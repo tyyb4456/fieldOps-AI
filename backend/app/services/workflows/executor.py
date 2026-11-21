@@ -18,9 +18,14 @@ from app.models.user import User
 from app.models.work_order_proposal import WorkOrderProposal
 from app.models.workflow_run import WorkflowRun
 from app.services.diagnostics.diagnostics import (
+    DiagnosticPreparation,
     DiagnosticResult,
     DiagnosticService,
     get_complaint_for_operations_user,
+)
+from app.services.diagnostics.readiness_context import (
+    DIAGNOSTIC_CONTEXT_FINGERPRINT_FIELDS,
+    compute_diagnostic_context,
 )
 from app.services.rag.vector_index import VectorIndex
 from app.services.work_orders.work_order_proposals import (
@@ -93,6 +98,61 @@ def _claim_exists(
         )
         .exists()
     )
+
+
+async def _capture_diagnostic_context(
+    session: AsyncSession,
+    workflow_run: WorkflowRun,
+    preparation: DiagnosticPreparation,
+    *,
+    background_task_id: uuid.UUID | None,
+    claimed_started_at: datetime | None,
+) -> None:
+    """Persist the versioned readiness fingerprint once the context is read.
+
+    The update is fenced by the caller's background-task claim so a worker that
+    lost ownership cannot overwrite the fingerprint recorded by the execution
+    that actually read the evidence.
+    """
+
+    context = await compute_diagnostic_context(
+        session,
+        preparation.complaint,
+        preparation.equipment,
+    )
+    payload = dict(workflow_run.input_payload or {})
+    payload.update(
+        {
+            "context_fingerprint": context.fingerprint,
+            "context_fingerprint_version": context.fingerprint_version,
+            "context_fingerprint_fields": list(
+                DIAGNOSTIC_CONTEXT_FINGERPRINT_FIELDS
+            ),
+            "evidence_revision": context.evidence_revision,
+            "context_captured_at": datetime.now(UTC).isoformat(),
+        }
+    )
+
+    statement = (
+        update(WorkflowRun)
+        .where(
+            WorkflowRun.id == workflow_run.id,
+            WorkflowRun.status == WorkflowRunStatus.RUNNING,
+        )
+        .values(input_payload=payload)
+        .returning(WorkflowRun.id)
+        .execution_options(synchronize_session=False)
+    )
+    if background_task_id is not None and claimed_started_at is not None:
+        statement = statement.where(
+            _claim_exists(background_task_id, claimed_started_at)
+        )
+    updated = (await session.execute(statement)).scalar_one_or_none()
+    if updated is None:
+        raise WorkflowOwnershipLostError(
+            "The workflow execution ownership was lost."
+        )
+    workflow_run.input_payload = payload
 
 
 def _make_step_callback(
@@ -181,12 +241,25 @@ async def execute_workflow(
     try:
         if workflow_run.workflow_type is WorkflowRunType.DIAGNOSTIC_INVESTIGATION:
             diagnostic = diagnostic_service or build_diagnostic_service()
+
+            async def on_context_loaded(
+                preparation: DiagnosticPreparation,
+            ) -> None:
+                await _capture_diagnostic_context(
+                    session,
+                    workflow_run,
+                    preparation,
+                    background_task_id=background_task_id,
+                    claimed_started_at=claimed_started_at,
+                )
+
             graph = build_diagnostic_graph(
                 service=diagnostic,
                 session=session,
                 user=user,
                 vector_index=vector_index,
                 on_step=on_step,
+                on_context_loaded=on_context_loaded,
             )
             state = await graph.ainvoke(
                 {

@@ -18,11 +18,13 @@ from app.api.dependencies.work_order_proposals import (
 )
 from app.main import app
 from app.models.complaint import Complaint
+from app.models.complaint_history import ComplaintHistory
 from app.models.enums import (
     AssignmentStatus,
     ComplaintChannel,
     ComplaintStatus,
     Priority,
+    WorkflowRunType,
     WorkOrderProposalStatus,
     WorkOrderStatus,
 )
@@ -30,6 +32,7 @@ from app.models.equipment import Equipment
 from app.models.technician_assignment import TechnicianAssignment
 from app.models.work_order import WorkOrder
 from app.models.work_order_proposal import WorkOrderProposal
+from app.models.workflow_run import WorkflowRun
 from app.schemas.diagnostics.diagnostic import DiagnosticStatus
 from app.services.agents.work_order_preparation_agent import (
     ModelWorkOrderDraft,
@@ -40,6 +43,12 @@ from app.services.agents.work_order_preparation_agent import (
 )
 from app.services.assignments import assignments as assignment_service
 from app.services.assignments.technician_recommendation import recommend_technicians
+from app.services.complaints import lifecycle_service
+from app.services.complaints.lifecycle import (
+    DiagnosticNotReadyError,
+    DiagnosticStaleError,
+    LifecycleEvent,
+)
 from app.services.diagnostics.diagnostics import (
     DiagnosticCheck,
     DiagnosticResult,
@@ -61,6 +70,9 @@ from tests.support import (
     seed_customer,
     seed_equipment,
     seed_technician,
+)
+from tests.support import (
+    seed_ready_complaint as seed_lifecycle_ready_complaint,
 )
 
 
@@ -198,13 +210,24 @@ async def _seed_ready_complaint(
 ) -> tuple[Any, Any, Any]:
     _, customer, _ = await seed_customer(session)
     equipment = await seed_equipment(session, customer)
-    complaint = await seed_complaint(
+    complaint, _ = await seed_lifecycle_ready_complaint(
         session,
         customer,
-        equipment=equipment,
-        status=ComplaintStatus.READY_FOR_WORK_ORDER,
+        equipment,
     )
     return customer, equipment, complaint
+
+
+_MISSING_PHASE = object()
+
+
+def _set_diagnostic_phase(run: WorkflowRun, phase: object) -> None:
+    payload = dict(run.input_payload)
+    if phase is _MISSING_PHASE:
+        payload.pop("lifecycle_phase", None)
+    else:
+        payload["lifecycle_phase"] = phase
+    run.input_payload = payload
 
 
 async def _seed_skilled_technician(
@@ -457,13 +480,95 @@ async def test_approval_revalidates_technician_eligibility(
             WorkOrderProposal.id == proposal_id
         )
     )
+    assert proposal_count == 1
     work_order_count = await db_session.scalar(
         select(func.count(WorkOrder.id)).where(
             WorkOrder.complaint_id == complaint_id
         )
     )
-    assert proposal_count == 1
     assert work_order_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "phase",
+    [
+        pytest.param(_MISSING_PHASE, id="missing"),
+        pytest.param("unknown_phase", id="unknown"),
+        pytest.param(["pre_conversion"], id="malformed"),
+        pytest.param("post_conversion", id="post_conversion"),
+    ],
+)
+async def test_approval_rejects_missing_or_invalid_diagnostic_phase(
+    db_session: AsyncSession,
+    phase: object,
+) -> None:
+    admin, _ = await seed_admin(db_session)
+    _, _, complaint = await _seed_ready_complaint(db_session)
+    complaint_id = complaint.id
+    service = _service(_diagnosis(complaint.id))
+
+    proposal = await service.generate(
+        session=db_session,
+        user=admin,
+        vector_index=cast(Any, None),
+        complaint_id=complaint.id,
+    )
+    proposal_id = proposal.id
+    await db_session.commit()
+
+    run = await db_session.scalar(
+        select(WorkflowRun).where(
+            WorkflowRun.complaint_id == complaint_id,
+            WorkflowRun.workflow_type == WorkflowRunType.DIAGNOSTIC_INVESTIGATION,
+        )
+    )
+    assert run is not None
+    _set_diagnostic_phase(run, phase)
+    await db_session.commit()
+
+    with pytest.raises(DiagnosticNotReadyError):
+        await service.approve(
+            session=db_session,
+            admin=admin,
+            proposal_id=proposal_id,
+            technician_id=None,
+        )
+    await db_session.rollback()
+    db_session.expire_all()
+
+    refreshed = await db_session.get(WorkOrderProposal, proposal_id)
+    assert refreshed is not None
+    assert refreshed.status is WorkOrderProposalStatus.PENDING_APPROVAL
+    assert refreshed.reviewed_by_id is None
+    assert refreshed.reviewed_at is None
+    assert refreshed.resulting_work_order_id is None
+
+    complaint_after = await db_session.get(Complaint, complaint_id)
+    assert complaint_after is not None
+    assert complaint_after.status is ComplaintStatus.READY_FOR_WORK_ORDER
+    work_order_count = await db_session.scalar(
+        select(func.count(WorkOrder.id)).where(
+            WorkOrder.complaint_id == complaint_id
+        )
+    )
+    assert work_order_count == 0
+    assignment_count = await db_session.scalar(
+        select(func.count(TechnicianAssignment.id))
+        .join(
+            WorkOrder,
+            TechnicianAssignment.work_order_id == WorkOrder.id,
+        )
+        .where(WorkOrder.complaint_id == complaint_id)
+    )
+    assert assignment_count == 0
+    converted_history_count = await db_session.scalar(
+        select(func.count(ComplaintHistory.id)).where(
+            ComplaintHistory.complaint_id == complaint_id,
+            ComplaintHistory.event_type == "converted",
+        )
+    )
+    assert converted_history_count == 0
 
 
 @pytest.mark.asyncio
@@ -1210,3 +1315,53 @@ async def test_approval_rolls_back_when_assignment_creation_fails(
     complaint_after = await migrated_db_session.get(Complaint, complaint_id)
     assert complaint_after is not None
     assert complaint_after.status is ComplaintStatus.READY_FOR_WORK_ORDER
+
+
+@pytest.mark.asyncio
+async def test_approval_rejects_stale_diagnostic_evidence(
+    db_session: AsyncSession,
+) -> None:
+    admin, _ = await seed_admin(db_session)
+    _, _, complaint = await _seed_ready_complaint(db_session)
+    service = _service(_diagnosis(complaint.id))
+
+    proposal = await service.generate(
+        session=db_session,
+        user=admin,
+        vector_index=cast(Any, None),
+        complaint_id=complaint.id,
+    )
+    proposal_id = proposal.id
+    complaint_id = complaint.id
+    await db_session.commit()
+
+    await lifecycle_service.append_history(
+        db_session,
+        complaint_id=complaint_id,
+            event_type=LifecycleEvent.CUSTOMER_RESPONDED.value,
+            from_status=ComplaintStatus.READY_FOR_WORK_ORDER,
+            to_status=ComplaintStatus.ANALYZING,
+            changed_fields={"message": "Updated symptom."},
+            actor_id=None,
+        )
+    await db_session.commit()
+
+    with pytest.raises(DiagnosticStaleError):
+        await service.approve(
+            session=db_session,
+            admin=admin,
+            proposal_id=proposal_id,
+            technician_id=None,
+        )
+    await db_session.rollback()
+    db_session.expire_all()
+
+    refreshed = await db_session.get(WorkOrderProposal, proposal_id)
+    assert refreshed is not None
+    assert refreshed.status is WorkOrderProposalStatus.PENDING_APPROVAL
+    work_order_count = await db_session.scalar(
+        select(func.count(WorkOrder.id)).where(
+            WorkOrder.complaint_id == complaint_id
+        )
+    )
+    assert work_order_count == 0

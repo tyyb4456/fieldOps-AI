@@ -8,11 +8,16 @@ from langgraph.graph import END, START, StateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
-from app.services.diagnostics.diagnostics import DiagnosticResult, DiagnosticService
+from app.services.diagnostics.diagnostics import (
+    DiagnosticPreparation,
+    DiagnosticResult,
+    DiagnosticService,
+)
 from app.services.rag.vector_index import VectorIndex
 from app.services.workflows.context import WorkflowGraphContext
 
 ProgressCallback = Callable[[str], Awaitable[None]]
+ContextLoadedCallback = Callable[[DiagnosticPreparation], Awaitable[None]]
 
 
 class DiagnosticState(TypedDict, total=False):
@@ -28,6 +33,7 @@ def build_diagnostic_graph(
     user: User,
     vector_index: VectorIndex,
     on_step: ProgressCallback | None = None,
+    on_context_loaded: ContextLoadedCallback | None = None,
 ) -> Any:
     """Build the bounded diagnostic LangGraph workflow.
 
@@ -55,6 +61,8 @@ def build_diagnostic_graph(
         )
         context.diagnostic_preparation = preparation
         context.focus = state.get("focus")
+        if on_context_loaded is not None:
+            await on_context_loaded(preparation)
         return {
             "complaint_id": str(preparation.complaint.id),
             "focus": context.focus,
@@ -98,4 +106,8 @@ def build_diagnostic_graph(
     return graph.compile()
 
 
-__all__ = ["DiagnosticState", "build_diagnostic_graph"]
+__all__ = [
+    "ContextLoadedCallback",
+    "DiagnosticState",
+    "build_diagnostic_graph",
+]

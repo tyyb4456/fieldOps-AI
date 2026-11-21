@@ -57,6 +57,59 @@ class ComplaintHistoryListResponse(BaseModel):
     total: int
 
 
+class ComplaintStatusTransitionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: ComplaintStatus
+    expected_status: ComplaintStatus
+    reason: str | None = Field(default=None, max_length=4000)
+    reason_code: str | None = Field(default=None, max_length=100)
+    diagnostic_workflow_run_id: uuid.UUID | None = None
+    resolution_code: str | None = Field(default=None, max_length=100)
+    resolution_summary: str | None = Field(default=None, max_length=4000)
+
+    @field_validator(
+        "reason",
+        "reason_code",
+        "resolution_code",
+        "resolution_summary",
+    )
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    @model_validator(mode="after")
+    def validate_transition_request(self) -> ComplaintStatusTransitionRequest:
+        if self.status is self.expected_status:
+            raise ValueError("status must differ from expected_status")
+        if self.status in (
+            ComplaintStatus.RECEIVED,
+            ComplaintStatus.CONVERTED,
+        ):
+            raise ValueError(f"{self.status.value} cannot be a target status")
+        if self.status in (
+            ComplaintStatus.AWAITING_CUSTOMER,
+            ComplaintStatus.ESCALATED,
+        ) and not self.reason:
+            raise ValueError(f"{self.status.value} requires a reason")
+        if self.status is ComplaintStatus.CLOSED and (
+            not self.resolution_code or not self.resolution_summary
+        ):
+            raise ValueError(
+                "closed requires resolution_code and resolution_summary"
+            )
+        return self
+
+
+class ComplaintStatusTransitionResponse(BaseModel):
+    complaint: ComplaintResponse
+    history: ComplaintHistoryResponse
+    available_transitions: list[ComplaintStatus]
+
+
 class ComplaintCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

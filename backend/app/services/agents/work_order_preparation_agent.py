@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from typing import Any, Literal, cast
 
@@ -31,6 +30,7 @@ from app.services.assignments.technician_recommendation import (
     TechnicianRecommendationResult,
 )
 from app.services.diagnostics.diagnostics import DiagnosticResult
+from app.services.shared.canonical import canonical_digest, canonical_symptoms
 
 WORK_ORDER_PREPARATION_SYSTEM_PROMPT = """You are the Work-Order Preparation Agent for FieldOps AI.
 
@@ -424,17 +424,6 @@ STALE_CONTEXT_FINGERPRINT_FIELDS: tuple[str, ...] = (
 )
 
 
-def _canonical_symptoms(values: Any) -> list[str]:
-    if not isinstance(values, (list, tuple)):
-        return []
-    normalized = {
-        str(item).strip()
-        for item in values
-        if str(item).strip()
-    }
-    return sorted(normalized, key=str.casefold)
-
-
 def complaint_context_fingerprint(
     complaint: Complaint,
     equipment: Equipment | None,
@@ -452,7 +441,7 @@ def complaint_context_fingerprint(
         "version": STALE_CONTEXT_FINGERPRINT_VERSION,
         "description": complaint.description,
         "reported_error_code": complaint.reported_error_code,
-        "reported_symptoms": _canonical_symptoms(
+        "reported_symptoms": canonical_symptoms(
             complaint.reported_symptoms
         ),
         "priority": complaint.priority.value,
@@ -471,14 +460,7 @@ def complaint_context_fingerprint(
             }
         ),
     }
-    canonical = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return canonical_digest(payload)
 
 
 def complaint_context_snapshot(

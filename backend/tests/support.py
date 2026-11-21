@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,11 +14,21 @@ from app.models.enums import (
     MessageSenderType,
     Priority,
     UserRole,
+    WorkflowRunStatus,
+    WorkflowRunType,
 )
 from app.models.equipment import Equipment
 from app.models.message import Message
 from app.models.technician import Technician
 from app.models.user import User
+from app.models.workflow_run import WorkflowRun
+from app.services.complaints import lifecycle_service
+from app.services.complaints.lifecycle import LifecycleActor, ReadinessMarker
+from app.services.diagnostics.readiness_context import (
+    DIAGNOSTIC_CONTEXT_FINGERPRINT_FIELDS,
+    DIAGNOSTIC_CONTEXT_FINGERPRINT_VERSION,
+    compute_diagnostic_context,
+)
 from tests.conftest import make_clerk_token
 
 _UNSET = object()
@@ -188,3 +198,93 @@ async def seed_complaint(
     session.add(complaint)
     await session.commit()
     return complaint
+
+
+async def seed_completed_diagnostic_run(
+    session: AsyncSession,
+    complaint: Complaint,
+    equipment: Equipment,
+    *,
+    result_status: str = "diagnosed",
+    requires_escalation: bool = False,
+    lifecycle_phase: str = "pre_conversion",
+    finished_at: datetime | None = None,
+) -> WorkflowRun:
+    """Create a completed pre-conversion run with a captured fingerprint."""
+
+    context = await compute_diagnostic_context(session, complaint, equipment)
+    run = WorkflowRun(
+        complaint_id=complaint.id,
+        workflow_type=WorkflowRunType.DIAGNOSTIC_INVESTIGATION,
+        input_payload={
+            "focus": None,
+            "lifecycle_phase": lifecycle_phase,
+            "context_fingerprint": context.fingerprint,
+            "context_fingerprint_version": (
+                DIAGNOSTIC_CONTEXT_FINGERPRINT_VERSION
+            ),
+            "context_fingerprint_fields": list(
+                DIAGNOSTIC_CONTEXT_FINGERPRINT_FIELDS
+            ),
+            "evidence_revision": context.evidence_revision,
+            "context_captured_at": datetime.now(UTC).isoformat(),
+        },
+        result_payload={
+            "complaint_id": str(complaint.id),
+            "status": result_status,
+            "requires_escalation": requires_escalation,
+        },
+        status=WorkflowRunStatus.COMPLETED,
+        current_step="completed",
+        finished_at=finished_at or datetime.now(UTC),
+    )
+    session.add(run)
+    await session.commit()
+    return run
+
+
+async def seed_ready_complaint(
+    session: AsyncSession,
+    customer: Customer,
+    equipment: Equipment,
+    *,
+    admin: User | None = None,
+    description: str = "The inverter stopped generating power.",
+) -> tuple[Complaint, WorkflowRun]:
+    """Drive a complaint to readiness through a real lifecycle transition."""
+
+    resolved_admin = admin
+    if resolved_admin is None:
+        resolved_admin, _ = await seed_admin(session)
+
+    complaint = await seed_complaint(
+        session,
+        customer,
+        equipment=equipment,
+        description=description,
+        status=ComplaintStatus.ANALYZING,
+    )
+    run = await seed_completed_diagnostic_run(session, complaint, equipment)
+    fingerprint = run.input_payload["context_fingerprint"]
+    marker = ReadinessMarker(
+        readiness_source="lifecycle_v1",
+        diagnostic_workflow_run_id=str(run.id),
+        diagnostic_context_fingerprint=fingerprint,
+        diagnostic_context_fingerprint_version=(
+            DIAGNOSTIC_CONTEXT_FINGERPRINT_VERSION
+        ),
+        diagnostic_evidence_revision=run.input_payload["evidence_revision"],
+    )
+    await lifecycle_service.transition_complaint(
+        session,
+        complaint_id=complaint.id,
+        target_status=ComplaintStatus.READY_FOR_WORK_ORDER,
+        actor=LifecycleActor.ADMIN,
+        actor_id=resolved_admin.id,
+        expected_status=ComplaintStatus.ANALYZING,
+        fields={"reason": "Diagnostic supports readiness."},
+        readiness_marker=marker,
+    )
+    await session.commit()
+    await session.refresh(complaint)
+    return complaint, run

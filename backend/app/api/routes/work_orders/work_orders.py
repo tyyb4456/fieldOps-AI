@@ -34,7 +34,11 @@ from app.services.assignments.assignments import (
     InvalidAssignmentStateError,
     is_active_assignment_conflict,
 )
-from app.services.complaints.lifecycle import PendingProposalConflictError
+from app.services.complaints.lifecycle import (
+    ComplaintLifecycleError,
+    PendingProposalConflictError,
+    http_status_for_error,
+)
 from app.services.work_orders import work_orders as work_order_service
 from app.services.work_orders.work_orders import (
     InvalidComplaintConversionError,
@@ -198,6 +202,13 @@ async def create_work_order(
     except InvalidComplaintConversionError as exc:
         await session.rollback()
         raise _invalid_complaint_state_error() from exc
+    except ComplaintLifecycleError as exc:
+        await session.rollback()
+        raise AppError(
+            exc.message,
+            status_code=http_status_for_error(exc),
+            code=exc.code.value,
+        ) from exc
     except IntegrityError as exc:
         await session.rollback()
         raise _work_order_conflict_error() from exc

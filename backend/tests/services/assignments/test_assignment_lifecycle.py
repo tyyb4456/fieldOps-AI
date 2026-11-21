@@ -12,7 +12,6 @@ from sqlalchemy.orm import selectinload
 from app.api.routes.assignments import assignments as assignment_routes
 from app.models.enums import (
     AssignmentStatus,
-    ComplaintStatus,
     WorkOrderStatus,
 )
 from app.models.technician_assignment import TechnicianAssignment
@@ -31,9 +30,9 @@ from app.services.work_orders.service_records import ServiceRecordStateError
 from tests.support import (
     bearer,
     seed_admin,
-    seed_complaint,
     seed_customer,
     seed_equipment,
+    seed_ready_complaint,
     seed_technician,
 )
 
@@ -93,13 +92,13 @@ async def _create_work_order(
 ) -> tuple[str, object, str]:
     _, customer, _ = await seed_customer(session)
     equipment = await seed_equipment(session, customer)
-    complaint = await seed_complaint(
+    admin, admin_token = await seed_admin(session)
+    complaint, _ = await seed_ready_complaint(
         session,
         customer,
-        equipment=equipment,
-        status=ComplaintStatus.READY_FOR_WORK_ORDER,
+        equipment,
+        admin=admin,
     )
-    admin, admin_token = await seed_admin(session)
     created = await api_client.post(
         f"/api/v1/admin/complaints/{complaint.id}/work-orders",
         headers=bearer(admin_token),
